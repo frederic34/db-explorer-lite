@@ -55,3 +55,12 @@ npm run build      # vérification des types + bundle esbuild dans dist/
 # F5 dans VS Code pour lancer une fenêtre de développement
 npm run package    # produit db-explorer-lite-<version>.vsix
 ```
+
+### Publier une version
+
+Un workflow GitHub Actions (`.github/workflows/release.yml`) construit l'extension à chaque push et pull request, et publie une **release avec le `.vsix`** lorsqu'un tag `v*` est poussé. Le tag doit correspondre à la version du `package.json` :
+
+```bash
+npm version patch          # met à jour package.json et crée le tag vX.Y.Z
+git push --follow-tags
+```
