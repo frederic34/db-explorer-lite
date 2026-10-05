@@ -1,0 +1,246 @@
+{
+  "name": "db-explorer-lite",
+  "displayName": "DB Explorer Lite",
+  "description": "Se connecter à MySQL/MariaDB ou PostgreSQL, parcourir les tables, consulter les données et exécuter des requêtes SQL.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "sql",
+    "mysql",
+    "mariadb",
+    "postgresql",
+    "database"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dbExplorer",
+          "title": "DB Explorer",
+          "icon": "resources/database.svg"
+        }
+      ]
+    },
+    "views": {
+      "dbExplorer": [
+        {
+          "id": "dbExplorer.connections",
+          "name": "Connexions"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dbExplorer.connections",
+        "contents": "Aucune connexion configurée.\n[Ajouter une connexion](command:dbExplorer.addConnection)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dbExplorer.addConnection",
+        "title": "Ajouter une connexion",
+        "category": "DB Explorer",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dbExplorer.editConnection",
+        "title": "Modifier la connexion",
+        "category": "DB Explorer",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dbExplorer.removeConnection",
+        "title": "Supprimer la connexion",
+        "category": "DB Explorer",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dbExplorer.refresh",
+        "title": "Actualiser",
+        "category": "DB Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dbExplorer.newQuery",
+        "title": "Nouvelle requête SQL",
+        "category": "DB Explorer",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "dbExplorer.runQuery",
+        "title": "Exécuter la requête",
+        "category": "DB Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dbExplorer.previewTable",
+        "title": "Afficher les données",
+        "category": "DB Explorer",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "dbExplorer.selectConnection",
+        "title": "Choisir la connexion de cet éditeur",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.copyName",
+        "title": "Copier le nom",
+        "category": "DB Explorer"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dbExplorer.addConnection",
+          "when": "view == dbExplorer.connections",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dbExplorer.refresh",
+          "when": "view == dbExplorer.connections",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/inline": [
+        {
+          "command": "dbExplorer.newQuery",
+          "when": "view == dbExplorer.connections && viewItem == connection",
+          "group": "inline@1"
+        },
+        {
+          "command": "dbExplorer.previewTable",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(table|view)$/",
+          "group": "inline@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dbExplorer.previewTable",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(table|view)$/",
+          "group": "1_query@1"
+        },
+        {
+          "command": "dbExplorer.newQuery",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(connection|container|table|view)$/",
+          "group": "1_query@2"
+        },
+        {
+          "command": "dbExplorer.copyName",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(container|table|view|column)$/",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "dbExplorer.editConnection",
+          "when": "view == dbExplorer.connections && viewItem == connection",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "dbExplorer.removeConnection",
+          "when": "view == dbExplorer.connections && viewItem == connection",
+          "group": "3_manage@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "dbExplorer.runQuery",
+          "when": "editorLangId == sql",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dbExplorer.editConnection",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.removeConnection",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.previewTable",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.copyName",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.runQuery",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "dbExplorer.selectConnection",
+          "when": "editorLangId == sql"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "dbExplorer.runQuery",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+alt+enter",
+        "when": "editorTextFocus && editorLangId == sql"
+      }
+    ],
+    "configuration": {
+      "title": "DB Explorer Lite",
+      "properties": {
+        "dbExplorer.previewLimit": {
+          "type": "number",
+          "default": 200,
+          "minimum": 1,
+          "description": "Nombre de lignes affichées lors de l'aperçu d'une table."
+        },
+        "dbExplorer.maxRows": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1,
+          "description": "Nombre maximum de lignes conservées et affichées pour un résultat de requête (le reste est ignoré)."
+        },
+        "dbExplorer.showSystemSchemas": {
+          "type": "boolean",
+          "default": false,
+          "description": "Afficher les bases / schémas système (information_schema, mysql, pg_catalog…)."
+        },
+        "dbExplorer.csvSeparator": {
+          "type": "string",
+          "enum": [
+            ",",
+            ";",
+            "tab"
+          ],
+          "default": ",",
+          "description": "Séparateur utilisé pour l'export CSV (« ; » est souvent préférable pour Excel en français)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ./",
+    "build": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --sourcemap",
+    "build:prod": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --minify",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --sourcemap --watch",
+    "package": "npm run build:prod && vsce package --no-dependencies --allow-missing-repository --skip-license"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/pg": "^8.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  }
+}
