@@ -143,3 +143,73 @@ test('maxRows tronque le résultat', async () => {
   assert.equal(r.truncated, true);
   await d.dispose();
 });
+
+test('structure : colonnes, index, contraintes, DDL, vue', async () => {
+  await makeDb(SCHEMA + 'CREATE UNIQUE INDEX ux_name ON customers(name); CREATE INDEX ix_total ON orders(total);');
+  const d = createDriver(cfg(), '', opts);
+  const o = await d.describeTable('main', 'orders');
+  assert.equal(o.isView, false);
+  assert.deepEqual(o.columns.map((c) => c.name), ['id', 'customer_id', 'total', 'tax']);
+  assert.equal(o.columns[3].extra, 'VIRTUAL GENERATED');
+  assert.ok(o.indexes.some((i) => i.name === 'ix_total' && i.columns.join() === 'total' && !i.unique));
+  const fk = o.constraints.find((k) => k.kind === 'FOREIGN KEY');
+  assert.ok(fk && /REFERENCES "customers" \("id"\)/.test(fk.definition), fk && fk.definition);
+  assert.ok(o.ddl.includes('CREATE TABLE orders') && o.ddl.includes('CREATE INDEX ix_total'));
+  const c = await d.describeTable('main', 'customers');
+  assert.ok(c.indexes.some((i) => i.name === 'ux_name' && i.unique));
+  const l = await d.describeTable('main', 'lines');
+  assert.equal(l.constraints.find((k) => k.kind === 'PRIMARY KEY').definition, '("order_id", "n")');
+  const v = await d.describeTable('main', 'big');
+  assert.equal(v.isView, true);
+  assert.ok(/CREATE VIEW big/.test(v.ddl));
+  await assert.rejects(d.describeTable('main', 'rien'), /introuvable/);
+  // DDL rejoué dans une base vierge : structure identique
+  const SQL = await initSqlJs();
+  const copy = new SQL.Database();
+  for (const t of ['customers', 'orders', 'lines']) { copy.exec((await d.describeTable('main', t)).ddl); }
+  const names = copy.exec("SELECT name FROM sqlite_master WHERE type IN ('table','index') ORDER BY name")[0].values.flat();
+  assert.ok(names.includes('ix_total') && names.includes('ux_name') && names.includes('lines'));
+  copy.close();
+  await d.dispose();
+});
+
+test('plusieurs instructions : un résultat par SELECT', async () => {
+  const d = createDriver(cfg(), '', opts);
+  const r = await d.query('SELECT 1 AS a; SELECT name, id FROM customers ORDER BY id LIMIT 2;');
+  assert.equal(r.sets.length, 2);
+  assert.deepEqual(r.sets[0].rows, [['1']]);
+  assert.deepEqual(r.columns, ['name', 'id']);
+  assert.deepEqual(r.rows, [['Alice', '1'], ['Bob', '2']]);
+  assert.equal((await d.query('SELECT 1')).sets, undefined);
+  await d.dispose();
+});
+
+test('export : INSERT SQL rejoué dans SQLite, JSON typé, lecture par lots', async () => {
+  await makeDb(SCHEMA);
+  const { formatRows, streamTable } = require('../.test-build/exporter.js');
+  const d = createDriver(cfg(), '', opts);
+  const cols = await d.listColumns('main', 'customers');
+  const rows = (await d.query('SELECT * FROM customers ORDER BY id')).rows;
+  const ec = cols.map((c) => ({ name: c.name, type: c.type }));
+  const sql = await formatRows({ format: 'sql', columns: ec, dbType: 'sqlite', table: '"copie"' }, rows);
+  const SQL = await initSqlJs();
+  const copy = new SQL.Database();
+  copy.exec('CREATE TABLE copie (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT, photo BLOB)');
+  copy.exec(sql.text);
+  const back = copy.exec('SELECT id, name, note, CASE WHEN photo IS NULL THEN NULL ELSE hex(photo) END FROM copie ORDER BY id')[0].values;
+  assert.deepEqual(back, [[1, 'Alice', '100% bio', '0102'], [2, 'Bob', null, null], [3, 'Chloé', 'a_b', null]]);
+  copy.close();
+  const js = JSON.parse((await formatRows({ format: 'json', columns: ec }, rows)).text);
+  assert.strictEqual(js[0].id, 1);
+  assert.strictEqual(js[1].note, null);
+
+  const seen = [];
+  const n = await streamTable({
+    driver: d, batch: 2, isCancelled: () => false,
+    query: { dbType: 'sqlite', container: 'main', table: 'customers', columns: cols },
+    onBatch: async (r) => seen.push(...r.map((x) => x[0])),
+  });
+  assert.equal(n, 3);
+  assert.deepEqual(seen, ['1', '2', '3']);
+  await d.dispose();
+});

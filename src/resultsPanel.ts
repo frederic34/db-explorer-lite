@@ -1,4 +1,7 @@
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildCountQuery, buildPageQuery } from './browse';
 import {
@@ -9,8 +12,9 @@ import {
   EditPlan,
   planEditing,
 } from './editing';
+import { EXTENSIONS, ExportFormat, ExportOptions, formatRows, RowFormatter, streamTable } from './exporter';
 import { ColumnInfo, DbDriver, DbType, QueryResult } from './types';
-import { errorMessage } from './util';
+import { errorMessage, quoteIdent } from './util';
 
 type Row = (string | null)[];
 
@@ -114,6 +118,9 @@ interface Payload {
   badges?: string[];
   /** Par colonne : table référencée si c'est une clé étrangère (lien cliquable). */
   fks?: ({ container: string; table: string; column: string } | null)[];
+  /** Script de plusieurs instructions : un onglet par résultat. */
+  sets?: { label: string; title: string }[];
+  activeSet?: number;
 }
 
 interface State {
@@ -125,6 +132,16 @@ interface State {
   browse?: BrowseState;
   /** Pile des vues précédentes (navigation par clé étrangère). */
   nav?: NavFrame[];
+  /** Dialecte connu (requis pour exporter en INSERT SQL d'un résultat de requête). */
+  dbType?: DbType;
+}
+
+interface MultiState {
+  connection: string;
+  sql: string;
+  sets: QueryResult[];
+  badges?: string[];
+  dbType?: DbType;
 }
 
 const CSS = `
@@ -201,6 +218,13 @@ const CSS = `
   td.editcell label { display: flex; align-items: center; gap: 3px; white-space: nowrap;
                       color: var(--vscode-descriptionForeground); font-size: 0.85em; padding-top: 3px; }
   td.readonlycell { color: var(--vscode-descriptionForeground); }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tabs .tab { border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground);
+               border-radius: 3px; padding: 3px 10px; }
+  .tabs .tab:hover { background: var(--vscode-toolbar-hoverBackground); }
+  .tabs .tab.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+                      border-color: var(--vscode-button-background); }
+  .tabs .tabinfo { opacity: 0.8; font-size: 0.85em; }
 `;
 
 const SCRIPT = String.raw`
@@ -225,6 +249,23 @@ const SCRIPT = String.raw`
   var summary = el('span', 'muted', ' · ' + data.summary);
   top.appendChild(summary);
   root.appendChild(top);
+
+  if (data.sets) {
+    var tabs = el('div', 'tabs');
+    tabs.setAttribute('role', 'tablist');
+    data.sets.forEach(function (t, i) {
+      var b = el('button', 'tab' + (i === data.activeSet ? ' active' : ''), t.label);
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', i === data.activeSet ? 'true' : 'false');
+      b.title = 'Résultat ' + t.label + ' : ' + t.title;
+      b.appendChild(el('span', 'tabinfo', ' ' + t.title));
+      b.addEventListener('click', function () {
+        if (i !== data.activeSet) { vscode.postMessage({ type: 'selectSet', index: i, token: data.token }); }
+      });
+      tabs.appendChild(b);
+    });
+    root.appendChild(tabs);
+  }
 
   var details = el('details', 'sql');
   details.appendChild(el('summary', '', 'Requête'));
@@ -269,8 +310,9 @@ const SCRIPT = String.raw`
     delBtn = el('button', 'danger', 'Supprimer la sélection');
     addBtn = el('button', 'primary', 'Ajouter une ligne');
   }
-  var exportBtn = el('button', '', 'Exporter en CSV');
-  exportBtn.addEventListener('click', function () { vscode.postMessage({ type: 'exportCsv', token: data.token }); });
+  var exportBtn = el('button', '', 'Exporter…');
+  exportBtn.title = 'Exporter en CSV, JSON ou instructions INSERT';
+  exportBtn.addEventListener('click', function () { vscode.postMessage({ type: 'export', token: data.token }); });
   bar.appendChild(filter);
   bar.appendChild(info);
   bar.appendChild(spacer);
@@ -865,9 +907,44 @@ export class ResultsPanel {
   private panel?: vscode.WebviewPanel;
   private last?: State;
   private token = '';
+  private multi?: MultiState;
 
   /** Résultat d'une requête libre : lecture seule, tri et filtre appliqués à la page affichée. */
-  showResult(connection: string, sql: string, result: QueryResult, badges?: string[]): void {
+  showResult(connection: string, sql: string, result: QueryResult, badges?: string[], dbType?: DbType): void {
+    if (result.sets && result.sets.length > 1) {
+      this.multi = { connection, sql, sets: result.sets, badges, dbType };
+      this.showSet(result.sets.length - 1);
+      return;
+    }
+    this.multi = undefined;
+    this.renderResult(connection, sql, result, badges, dbType);
+  }
+
+  /** Affiche le résultat n° `index` d'un script (onglet choisi). */
+  private showSet(index: number): void {
+    const m = this.multi;
+    if (!m) {
+      return;
+    }
+    const set = m.sets[index];
+    this.renderResult(m.connection, m.sql, set, m.badges, m.dbType, {
+      sets: m.sets.map((r, i) => ({
+        label: `${i + 1}`,
+        title: r.columns.length > 0 ? `${plural(r.rowCount, 'ligne', 'lignes')}` : `${r.command ?? 'OK'} · ${plural(r.affectedRows ?? 0, 'ligne affectée', 'lignes affectées')}`,
+      })),
+      activeSet: index,
+      position: `Résultat ${index + 1}/${m.sets.length}`,
+    });
+  }
+
+  private renderResult(
+    connection: string,
+    sql: string,
+    result: QueryResult,
+    badges?: string[],
+    dbType?: DbType,
+    multi?: { sets: { label: string; title: string }[]; activeSet: number; position: string },
+  ): void {
     let summary: string;
     if (result.columns.length > 0) {
       summary = plural(result.rowCount, 'ligne', 'lignes');
@@ -878,12 +955,16 @@ export class ResultsPanel {
       const cmd = result.command ? `${result.command} · ` : '';
       summary = `${cmd}${plural(result.affectedRows ?? 0, 'ligne affectée', 'lignes affectées')}`;
     }
-    if (result.statements && result.statements > 1) {
+    if (multi) {
+      summary = `${multi.position} · ${summary}`;
+    } else if (result.statements && result.statements > 1) {
       summary += ` · ${result.statements} instructions exécutées (résultat de la dernière)`;
     }
-    summary += ` · ${result.durationMs} ms`;
+    if (result.durationMs > 0) {
+      summary += ` · ${result.durationMs} ms`;
+    }
 
-    this.last = { columns: result.columns, rows: result.rows.map((r) => [...r]) };
+    this.last = { columns: result.columns, rows: result.rows.map((r) => [...r]), dbType };
     this.render({
       kind: 'result',
       token: '',
@@ -893,6 +974,8 @@ export class ResultsPanel {
       rows: result.rows,
       summary,
       badges,
+      sets: multi?.sets,
+      activeSet: multi?.activeSet,
     });
   }
 
@@ -905,6 +988,7 @@ export class ResultsPanel {
     src: TableSource,
     opts: { where?: WhereState; nav?: NavFrame[]; init?: NavFrame } = {},
   ): Promise<void> {
+    this.multi = undefined;
     const init = opts.init;
     const b: BrowseState = {
       src,
@@ -1249,6 +1333,7 @@ export class ResultsPanel {
 
   showError(connection: string, sql: string, message: string, badges?: string[]): void {
     this.last = undefined;
+    this.multi = undefined;
     this.render({
       kind: 'error',
       token: '',
@@ -1310,8 +1395,16 @@ export class ResultsPanel {
       case 'back':
         await this.back();
         break;
+      case 'selectSet': {
+        const i = Number(msg.index);
+        if (this.multi && Number.isInteger(i) && i >= 0 && i < this.multi.sets.length) {
+          this.showSet(i);
+        }
+        break;
+      }
+      case 'export':
       case 'exportCsv':
-        await this.exportCsv();
+        await this.exportData();
         break;
       case 'updateRow':
         await this.updateRow(token, msg.rowIndex, msg.changes);
@@ -1544,32 +1637,204 @@ export class ResultsPanel {
     }
   }
 
-  private async exportCsv(): Promise<void> {
-    if (!this.last) {
+  /** Exporte le résultat affiché (ou toute la table pour un aperçu) en CSV, JSON ou INSERT SQL. */
+  private async exportData(): Promise<void> {
+    const last = this.last;
+    if (!last) {
       return;
     }
-    const setting = vscode.workspace.getConfiguration('dbExplorer').get<string>('csvSeparator', ',');
-    const sep = setting === 'tab' ? '\t' : setting;
-    const escape = (v: string | null): string => {
-      if (v === null) {
-        return '';
-      }
-      return v.includes(sep) || /["\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    };
-    const rows = this.last.rows.filter((r): r is Row => r !== null);
-    const lines = [this.last.columns, ...rows].map((r) => r.map(escape).join(sep));
+    const b = last.browse;
+    const dbType = b ? b.src.dbType : last.dbType;
 
+    const formats: { label: string; description: string; format: ExportFormat }[] = [
+      { label: 'CSV', description: 'tableur (Excel, LibreOffice…)', format: 'csv' },
+      { label: 'JSON', description: 'tableau d\'objets, un par ligne', format: 'json' },
+    ];
+    if (dbType) {
+      formats.push({ label: 'INSERT SQL', description: 'instructions INSERT rejouables', format: 'sql' });
+    }
+    const pickedFormat = await vscode.window.showQuickPick(formats, { placeHolder: 'Format d\'export' });
+    if (!pickedFormat) {
+      return;
+    }
+    const format = pickedFormat.format;
+
+    let whole = false;
+    if (b) {
+      const shown = last.rows.filter((r) => r !== null).length;
+      const active = [b.filter ? `filtre « ${b.filter} »` : '', b.where ? 'filtre de navigation' : '', b.sort ? 'tri en cours' : '']
+        .filter(Boolean)
+        .join(', ');
+      const scope = await vscode.window.showQuickPick(
+        [
+          { label: 'Page affichée', description: `${shown} ligne(s), modifications comprises`, whole: false },
+          {
+            label: 'Toute la table',
+            description: active ? `lue sur le serveur — ${active}` : 'lue sur le serveur par lots',
+            whole: true,
+          },
+        ],
+        { placeHolder: 'Que faut-il exporter ?' },
+      );
+      if (!scope) {
+        return;
+      }
+      whole = scope.whole;
+    }
+
+    let table: string | undefined;
+    if (format === 'sql' && dbType) {
+      if (b) {
+        table = `${quoteIdent(dbType, b.src.container)}.${quoteIdent(dbType, b.src.table)}`;
+        if (dbType === 'sqlite') {
+          table = quoteIdent(dbType, b.src.table);
+        }
+      } else {
+        const name = await vscode.window.showInputBox({
+          prompt: 'Nom de la table dans les instructions INSERT',
+          value: 'resultat',
+          validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+        });
+        if (!name) {
+          return;
+        }
+        table = quoteIdent(dbType, name.trim());
+      }
+    }
+
+    const defaultName = `${b ? b.src.table : 'resultat'}.${EXTENSIONS[format]}`;
     const uri = await vscode.window.showSaveDialog({
-      filters: { CSV: ['csv'] },
+      filters: { [pickedFormat.label]: [EXTENSIONS[format]] },
       saveLabel: 'Exporter',
+      defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir(), defaultName)),
     });
     if (!uri) {
       return;
     }
-    // BOM UTF-8 pour qu'Excel détecte correctement les accents.
-    const content = Buffer.from('﻿' + lines.join('\r\n') + '\r\n', 'utf8');
-    await vscode.workspace.fs.writeFile(uri, content);
-    vscode.window.showInformationMessage(`Export CSV enregistré : ${uri.fsPath}`);
+
+    const setting = vscode.workspace.getConfiguration('dbExplorer').get<string>('csvSeparator', ',');
+    const options: ExportOptions = {
+      format,
+      columns: last.columns.map((name) => ({
+        name,
+        type: b?.src.tableColumns.find((c) => c.name === name)?.type,
+      })),
+      csvSeparator: setting === 'tab' ? '\t' : setting,
+      dbType,
+      table,
+    };
+
+    try {
+      if (!whole || !b) {
+        const rows = last.rows.filter((r): r is Row => r !== null);
+        const { text, lost } = await formatRows(options, rows);
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+        this.exported(uri.fsPath, rows.length, lost);
+        return;
+      }
+      await this.exportWholeTable(b, options, uri);
+    } catch (err) {
+      vscode.window.showErrorMessage(`Export impossible : ${errorMessage(err)}`);
+    }
+  }
+
+  private async exportWholeTable(b: BrowseState, options: ExportOptions, uri: vscode.Uri): Promise<void> {
+    const { src } = b;
+    const driver = await src.getDriver();
+    const maxRows = vscode.workspace.getConfiguration('dbExplorer').get<number>('maxRows', 5000);
+    const batch = Math.max(1, Math.min(2000, maxRows - 1));
+
+    // Fichier local : écriture en continu (mémoire bornée). Autre schéma (distant) : tout en mémoire.
+    const chunks: string[] = [];
+    let stream: fs.WriteStream | undefined;
+    if (uri.scheme === 'file' || uri.scheme === undefined) {
+      stream = fs.createWriteStream(uri.fsPath, { encoding: 'utf8' });
+    }
+    let streamError: Error | undefined;
+    stream?.on('error', (e) => (streamError = e));
+    const write = async (chunk: string): Promise<void> => {
+      if (streamError) {
+        throw streamError;
+      }
+      if (!stream) {
+        chunks.push(chunk);
+      } else if (!stream.write(chunk)) {
+        await new Promise<void>((resolve) => stream!.once('drain', resolve));
+      }
+    };
+    const formatter = new RowFormatter(options, write);
+
+    let cancelled = false;
+    let written = 0;
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Export de ${src.table}`,
+          cancellable: true,
+        },
+        async (progress, cancel) => {
+          cancel.onCancellationRequested(() => (cancelled = true));
+          await formatter.begin();
+          let reported = 0;
+          written = await streamTable({
+            driver,
+            query: {
+              dbType: src.dbType,
+              container: src.container,
+              table: src.table,
+              columns: src.tableColumns,
+              sort: b.sort ? { column: src.tableColumns[b.sort.col].name, dir: b.sort.dir } : undefined,
+              filter: b.filter,
+              where: b.where ? { column: src.tableColumns[b.where.col].name, value: b.where.value } : undefined,
+            },
+            batch,
+            isCancelled: () => cancelled,
+            onBatch: (rows) => formatter.rows(rows),
+            onProgress: (done, total) => {
+              progress.report({
+                message: total ? `${done} / ${total} lignes` : `${done} lignes`,
+                increment: total ? ((done - reported) / total) * 100 : undefined,
+              });
+              reported = done;
+            },
+          });
+          if (!cancelled) {
+            await formatter.end();
+          }
+        },
+      );
+      if (stream) {
+        await new Promise<void>((resolve, reject) => {
+          stream!.once('error', reject);
+          stream!.end(resolve);
+        });
+      } else if (!cancelled) {
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(chunks.join(''), 'utf8'));
+      }
+    } catch (err) {
+      stream?.destroy();
+      if (stream) {
+        fs.rmSync(uri.fsPath, { force: true });
+      }
+      throw err;
+    }
+    if (cancelled) {
+      if (stream) {
+        fs.rmSync(uri.fsPath, { force: true });
+      }
+      vscode.window.showInformationMessage('Export annulé : le fichier partiel a été supprimé.');
+      return;
+    }
+    this.exported(uri.fsPath, written, formatter.lost.n);
+  }
+
+  private exported(file: string, rows: number, lost: number): void {
+    let msg = `Export enregistré : ${file} (${plural(rows, 'ligne', 'lignes')})`;
+    if (lost > 0) {
+      msg += ` — ${plural(lost, 'valeur binaire trop longue a été remplacée', 'valeurs binaires trop longues ont été remplacées')} par NULL.`;
+    }
+    void vscode.window.showInformationMessage(msg);
   }
 }
 
@@ -1587,6 +1852,7 @@ interface Message {
   refresh?: unknown;
   where?: unknown;
   col?: unknown;
+  index?: unknown;
 }
 
 function buildHtml(payload: Payload, nonce: string): string {

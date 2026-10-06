@@ -29,7 +29,15 @@ module.exports = {
     showErrorMessage: async (m) => { global.__errors = (global.__errors || []).concat([m]); },
     showSaveDialog: async () => global.__saveUri,
     showOpenDialog: async () => global.__openPick,
-    showInformationMessage() {},
+    withProgress: async (_o, task) => task({ report() {} }, { onCancellationRequested(cb) { if (global.__cancelNow) { cb(); } return { dispose() {} }; } }),
+    showInformationMessage(m) { global.__infos = (global.__infos || []).concat([m]); },
+    showQuickPick: async (items) => {
+      const want = (global.__picks || []).shift();
+      const list = await items;
+      return want === undefined ? undefined : list.find((i) => (i.label || i).includes(want));
+    },
+    showInputBox: async () => (global.__inputs || []).shift(),
   },
+  ProgressLocation: { Notification: 15, Window: 10 },
   workspace: { getConfiguration: () => ({ get: (_k, d) => d }), fs: { writeFile: async (u, c) => { global.__written = { u, c }; } } },
 };

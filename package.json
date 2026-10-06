@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "DB Explorer Lite",
   "description": "Se connecter à MySQL/MariaDB ou PostgreSQL, parcourir les tables, consulter les données et exécuter des requêtes SQL.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"
@@ -87,6 +87,18 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "dbExplorer.showStructure",
+        "title": "Afficher la structure (index, contraintes, DDL)",
+        "category": "DB Explorer",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "dbExplorer.showDiagram",
+        "title": "Diagramme des relations",
+        "category": "DB Explorer",
+        "icon": "$(type-hierarchy)"
+      },
+      {
         "command": "dbExplorer.selectConnection",
         "title": "Choisir la connexion de cet éditeur",
         "category": "DB Explorer"
@@ -151,6 +163,16 @@
           "group": "1_query@1"
         },
         {
+          "command": "dbExplorer.showStructure",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(table|view)$/",
+          "group": "1_query@1.5"
+        },
+        {
+          "command": "dbExplorer.showDiagram",
+          "when": "view == dbExplorer.connections && viewItem == container",
+          "group": "1_query@1"
+        },
+        {
           "command": "dbExplorer.newQuery",
           "when": "view == dbExplorer.connections && viewItem =~ /^(connection|container|table|view)$/",
           "group": "1_query@2"
@@ -199,6 +221,14 @@
         },
         {
           "command": "dbExplorer.previewTable",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.showStructure",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.showDiagram",
           "when": "false"
         },
         {
@@ -278,7 +308,7 @@
     "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies --allow-missing-repository --skip-license",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js"
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js"
   },
   "dependencies": {
     "mysql2": "^3.11.0",

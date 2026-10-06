@@ -49,6 +49,43 @@ export interface ColumnInfo {
   references?: { container: string; table: string; column: string };
 }
 
+export interface StructureColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+  /** Valeur par défaut telle qu'écrite par le serveur (expression SQL), ou null. */
+  default: string | null;
+  /** auto_increment, identité, colonne générée… */
+  extra?: string;
+  comment?: string;
+}
+
+export interface IndexInfo {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+  /** btree, hash, gin… */
+  method?: string;
+}
+
+export interface ConstraintInfo {
+  name: string;
+  kind: 'PRIMARY KEY' | 'UNIQUE' | 'FOREIGN KEY' | 'CHECK' | 'EXCLUDE';
+  /** Définition lisible : colonnes, table référencée, expression… */
+  definition: string;
+}
+
+export interface TableStructure {
+  isView: boolean;
+  columns: StructureColumn[];
+  indexes: IndexInfo[];
+  constraints: ConstraintInfo[];
+  /** Instruction(s) CREATE reconstituées ou fournies par le serveur. */
+  ddl: string;
+}
+
 export interface QueryResult {
   columns: string[];
   /** Cellules déjà converties en texte ; null = NULL SQL. */
@@ -64,6 +101,11 @@ export interface QueryResult {
   durationMs: number;
   /** Nombre d'instructions exécutées quand un script a été découpé (MySQL). */
   statements?: number;
+  /**
+   * Script de plusieurs instructions : le résultat de chacune, dans l'ordre (le résultat principal
+   * est celui de la dernière). `durationMs` d'un élément vaut 0 quand le serveur ne le fournit pas.
+   */
+  sets?: QueryResult[];
 }
 
 export interface WriteStatement {
@@ -80,6 +122,8 @@ export interface DbDriver {
   listTables(container: string): Promise<TableInfo[]>;
   listColumns(container: string, table: string): Promise<ColumnInfo[]>;
   query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult>;
+  /** Colonnes détaillées, index, contraintes et DDL d'une table ou d'une vue. */
+  describeTable(container: string, table: string): Promise<TableStructure>;
   /**
    * Exécute plusieurs instructions l'une après l'autre sur UNE connexion (variables, tables
    * temporaires et transactions restent visibles d'une instruction à l'autre) ; renvoie le

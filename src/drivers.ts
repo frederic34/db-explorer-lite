@@ -6,13 +6,17 @@ import { Pool, types as pgTypes } from 'pg';
 import {
   ColumnInfo,
   ConnectionConfig,
+  ConstraintInfo,
   DbDriver,
+  IndexInfo,
   DriverOptions,
   QueryResult,
+  StructureColumn,
   TableInfo,
+  TableStructure,
   WriteStatement,
 } from './types';
-import { CancelToken, repeatUntilDone } from './util';
+import { CancelToken, quoteIdent, repeatUntilDone } from './util';
 
 function mismatch(actual: number, expected: number): Error {
   return new Error(
@@ -136,6 +140,122 @@ export class MySqlDriver implements DbDriver {
       name: String(r[0]),
       isView: String(r[1]).includes('VIEW'),
     }));
+  }
+
+  async describeTable(container: string, table: string): Promise<TableStructure> {
+    const q = (n: string) => quoteIdent('mysql', n);
+    const cols = (
+      await this.run(
+        'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT ' +
+          'FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+        [container, table],
+      )
+    ).rows as unknown[][];
+    const columns: StructureColumn[] = cols.map((r) => {
+      const nullable = String(r[2]).toUpperCase() === 'YES';
+      const def = r[4] === null || (nullable && String(r[4]).toUpperCase() === 'NULL') ? null : String(r[4]);
+      return {
+        name: String(r[0]),
+        type: String(r[1]),
+        nullable,
+        primaryKey: String(r[3]).toUpperCase() === 'PRI',
+        default: def,
+        extra: String(r[5] ?? '') || undefined,
+        comment: String(r[6] ?? '') || undefined,
+      };
+    });
+
+    const idx = new Map<string, IndexInfo>();
+    const stats = (
+      await this.run(
+        'SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE, SUB_PART FROM information_schema.STATISTICS ' +
+          'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+        [container, table],
+      )
+    ).rows as unknown[][];
+    for (const r of stats) {
+      const name = String(r[0]);
+      const entry = idx.get(name) ?? {
+        name,
+        columns: [],
+        unique: Number(r[1]) === 0,
+        primary: name === 'PRIMARY',
+        method: String(r[3] ?? '') || undefined,
+      };
+      entry.columns.push(r[2] === null ? '(expression)' : String(r[2]) + (r[4] ? `(${r[4]})` : ''));
+      idx.set(name, entry);
+    }
+    const indexes = [...idx.values()].sort((a, b) => Number(b.primary) - Number(a.primary));
+
+    const constraints: ConstraintInfo[] = [];
+    try {
+      const tcs = (
+        await this.run(
+          'SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE FROM information_schema.TABLE_CONSTRAINTS ' +
+            'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY FIELD(CONSTRAINT_TYPE, \'PRIMARY KEY\', \'UNIQUE\', \'FOREIGN KEY\', \'CHECK\'), CONSTRAINT_NAME',
+          [container, table],
+        )
+      ).rows as unknown[][];
+      const kcu = (
+        await this.run(
+          'SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME ' +
+            'FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION',
+          [container, table],
+        )
+      ).rows as unknown[][];
+      const rules = new Map<string, string>();
+      for (const r of (
+        await this.run(
+          'SELECT CONSTRAINT_NAME, UPDATE_RULE, DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS ' +
+            'WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ?',
+          [container, table],
+        )
+      ).rows as unknown[][]) {
+        const parts = [
+          String(r[1]) !== 'RESTRICT' && String(r[1]) !== 'NO ACTION' ? ` ON UPDATE ${r[1]}` : '',
+          String(r[2]) !== 'RESTRICT' && String(r[2]) !== 'NO ACTION' ? ` ON DELETE ${r[2]}` : '',
+        ];
+        rules.set(String(r[0]), parts.join(''));
+      }
+      let checks = new Map<string, string>();
+      try {
+        const ck = (
+          await this.run(
+            'SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE FROM information_schema.TABLE_CONSTRAINTS tc ' +
+              'JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME ' +
+              "WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'CHECK'",
+            [container, table],
+          )
+        ).rows as unknown[][];
+        checks = new Map(ck.map((r) => [String(r[0]), String(r[1])]));
+      } catch {
+        // Serveur sans CHECK_CONSTRAINTS (MySQL < 8.0.16).
+      }
+      for (const r of tcs) {
+        const name = String(r[0]);
+        const kind = String(r[1]) as ConstraintInfo['kind'];
+        const rows = kcu.filter((k) => String(k[0]) === name);
+        const own = rows.map((k) => q(String(k[1]))).join(', ');
+        let definition = '';
+        if (kind === 'FOREIGN KEY') {
+          const target = rows[0];
+          definition =
+            `(${own}) REFERENCES ${q(String(target?.[2] ?? ''))}.${q(String(target?.[3] ?? ''))} ` +
+            `(${rows.map((k) => q(String(k[4]))).join(', ')})${rules.get(name) ?? ''}`;
+        } else if (kind === 'CHECK') {
+          definition = checks.get(name) ?? '';
+        } else {
+          definition = `(${own})`;
+        }
+        constraints.push({ name, kind, definition });
+      }
+    } catch {
+      // Droits insuffisants : seules les colonnes et les index sont affichés.
+    }
+
+    const created = (await this.run(`SHOW CREATE TABLE ${q(container)}.${q(table)}`)).rows as unknown[][];
+    const ddl = String(created[0]?.[1] ?? '');
+    return { isView: /^CREATE\b[^]*?\bVIEW\b/i.test(ddl.slice(0, 200)), columns, indexes, constraints, ddl: ddl + ';' };
   }
 
   async listColumns(container: string, table: string): Promise<ColumnInfo[]> {
@@ -275,6 +395,7 @@ export class MySqlDriver implements DbDriver {
     }
     cancel?.attach(this.killer(conn.threadId, () => done));
     let last: QueryResult | undefined;
+    const all: QueryResult[] = [];
     let index = 0;
     try {
       for (const sql of statements) {
@@ -288,6 +409,7 @@ export class MySqlDriver implements DbDriver {
           mysql.FieldPacket[] | undefined,
         ];
         last = this.toResult(rows, fields, Date.now() - s0);
+        all.push(last);
       }
     } catch (err) {
       if (statements.length > 1 && !cancel?.requested) {
@@ -301,7 +423,12 @@ export class MySqlDriver implements DbDriver {
       cancel?.detach();
       conn.release();
     }
-    return { ...(last as QueryResult), durationMs: Date.now() - t0, statements: statements.length };
+    return {
+      ...(last as QueryResult),
+      durationMs: Date.now() - t0,
+      statements: statements.length,
+      sets: all.length > 1 ? all : undefined,
+    };
   }
 
   async dispose(): Promise<void> {
@@ -348,7 +475,7 @@ export class PostgresDriver implements DbDriver {
     this.pool.on('error', () => undefined);
   }
 
-  private async rows(text: string, values: unknown[]): Promise<unknown[][]> {
+  private async rows(text: string, values: unknown[] = []): Promise<unknown[][]> {
     const res = await this.pool.query({ text, values, rowMode: 'array' });
     return res.rows as unknown[][];
   }
@@ -370,6 +497,124 @@ export class PostgresDriver implements DbDriver {
       name: String(r[0]),
       isView: r[1] === 'v' || r[1] === 'm',
     }));
+  }
+
+  async describeTable(container: string, table: string): Promise<TableStructure> {
+    const q = (n: string) => quoteIdent('postgres', n);
+    const OID =
+      '(SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2)';
+    const kind = await this.rows(
+      'SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2',
+      [container, table],
+    );
+    if (kind.length === 0) {
+      throw new Error(`Table ou vue introuvable : ${container}.${table}`);
+    }
+    const relkind = String(kind[0][0]);
+    const isView = relkind === 'v' || relkind === 'm';
+
+    const colRows = await this.rows(
+      'SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid), ' +
+        "a.attidentity, " +
+        (await this.hasGenerated() ? 'a.attgenerated' : "''") +
+        ', col_description(a.attrelid, a.attnum) FROM pg_attribute a ' +
+        'LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum ' +
+        `WHERE a.attrelid = ${OID} AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`,
+      [container, table],
+    );
+    const conRows = await this.rows(
+      `SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = ${OID} ORDER BY contype = 'p' DESC, contype = 'u' DESC, contype = 'f' DESC, conname`,
+      [container, table],
+    );
+    const pkCols = new Set<string>();
+    const KINDS: Record<string, ConstraintInfo['kind']> = {
+      p: 'PRIMARY KEY', u: 'UNIQUE', f: 'FOREIGN KEY', c: 'CHECK', x: 'EXCLUDE',
+    };
+    const constraints: ConstraintInfo[] = [];
+    for (const r of conRows) {
+      const k = KINDS[String(r[1])];
+      if (!k) {
+        continue; // contraintes de domaine / déclencheurs de contrainte : hors sujet ici
+      }
+      const def = String(r[2]);
+      constraints.push({ name: String(r[0]), kind: k, definition: def.replace(/^(PRIMARY KEY|UNIQUE|FOREIGN KEY|CHECK|EXCLUDE)\s*/i, '') });
+      if (k === 'PRIMARY KEY') {
+        for (const c of def.slice(def.indexOf('(') + 1, def.lastIndexOf(')')).split(',')) {
+          pkCols.add(c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+        }
+      }
+    }
+    const columns: StructureColumn[] = colRows.map((r) => {
+      const identity = String(r[4]);
+      const generated = String(r[5]) === 's';
+      const extra =
+        identity === 'a' ? 'GENERATED ALWAYS AS IDENTITY'
+        : identity === 'd' ? 'GENERATED BY DEFAULT AS IDENTITY'
+        : generated ? 'GENERATED ALWAYS AS (…) STORED'
+        : undefined;
+      return {
+        name: String(r[0]),
+        type: String(r[1]),
+        nullable: r[2] !== true,
+        primaryKey: pkCols.has(String(r[0])),
+        default: r[3] === null || identity !== '' ? (generated && r[3] !== null ? String(r[3]) : null) : String(r[3]),
+        extra,
+        comment: r[6] === null ? undefined : String(r[6]),
+      };
+    });
+
+    const idxRows = await this.rows(
+      'SELECT i.relname, ix.indisunique, ix.indisprimary, am.amname, pg_get_indexdef(ix.indexrelid), ' +
+        'ARRAY(SELECT pg_get_indexdef(ix.indexrelid, k + 1, true) FROM generate_series(0, ix.indnatts - 1) k) ' +
+        'FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid JOIN pg_am am ON am.oid = i.relam ' +
+        `WHERE ix.indrelid = ${OID} ORDER BY ix.indisprimary DESC, i.relname`,
+      [container, table],
+    );
+    const indexes: IndexInfo[] = idxRows.map((r) => ({
+      name: String(r[0]),
+      unique: r[1] === true,
+      primary: r[2] === true,
+      method: String(r[3]),
+      columns: (r[5] as string[]) ?? [],
+    }));
+
+    let ddl: string;
+    if (isView) {
+      const def = await this.rows(`SELECT pg_get_viewdef(${OID}, true)`, [container, table]);
+      ddl = `CREATE ${relkind === 'm' ? 'MATERIALIZED VIEW' : 'OR REPLACE VIEW'} ${q(container)}.${q(table)} AS\n${String(def[0]?.[0] ?? '').trim()}` +
+        (String(def[0]?.[0] ?? '').trim().endsWith(';') ? '' : ';');
+    } else {
+      const lines = columns.map((c) => {
+        let line = `  ${q(c.name)} ${c.type}`;
+        if (c.extra?.startsWith('GENERATED') && c.extra.includes('STORED')) {
+          line += ` GENERATED ALWAYS AS (${c.default ?? ''}) STORED`;
+        } else if (c.extra) {
+          line += ` ${c.extra}`;
+        } else if (c.default !== null) {
+          line += ` DEFAULT ${c.default}`;
+        }
+        return c.nullable ? line : line + ' NOT NULL';
+      });
+      for (const k of constraints) {
+        lines.push(`  CONSTRAINT ${q(k.name)} ${k.kind} ${k.definition}`);
+      }
+      const owned = new Set(constraints.map((k) => k.name));
+      const extraIdx = idxRows.filter((r) => !owned.has(String(r[0]))).map((r) => `${String(r[4])};`);
+      ddl = `CREATE TABLE ${q(container)}.${q(table)} (\n${lines.join(',\n')}\n);` + (extraIdx.length ? '\n\n' + extraIdx.join('\n') : '');
+    }
+    return { isView, columns, indexes, constraints, ddl };
+  }
+
+  private generatedColumn?: boolean;
+  /** pg_attribute.attgenerated n'existe qu'à partir de PostgreSQL 12. */
+  private async hasGenerated(): Promise<boolean> {
+    if (this.generatedColumn === undefined) {
+      const r = await this.rows(
+        "SELECT 1 FROM pg_attribute WHERE attrelid = 'pg_attribute'::regclass AND attname = 'attgenerated'",
+      );
+      this.generatedColumn = r.length > 0;
+    }
+    return this.generatedColumn;
   }
 
   async listColumns(container: string, table: string): Promise<ColumnInfo[]> {
@@ -470,26 +715,31 @@ export class PostgresDriver implements DbDriver {
       }
     }
     const durationMs = Date.now() - t0;
-    // Plusieurs instructions dans le texte : pg renvoie un tableau, on affiche la dernière.
-    const res = Array.isArray(raw) ? raw[raw.length - 1] : raw;
-
-    if (res.fields && res.fields.length > 0) {
-      return buildResult(
-        res.fields.map((f: { name: string }) => f.name),
-        res.rows as unknown[][],
-        this.opts.maxRows(),
-        durationMs,
-      );
+    // Plusieurs instructions dans le texte : pg renvoie un tableau ; le résultat principal est le dernier.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const convert = (res: any, ms: number): QueryResult =>
+      res.fields && res.fields.length > 0
+        ? buildResult(
+            res.fields.map((f: { name: string }) => f.name),
+            res.rows as unknown[][],
+            this.opts.maxRows(),
+            ms,
+          )
+        : {
+            columns: [],
+            rows: [],
+            rowCount: 0,
+            affectedRows: typeof res.rowCount === 'number' ? res.rowCount : 0,
+            command: res.command,
+            truncated: false,
+            durationMs: ms,
+          };
+    if (Array.isArray(raw)) {
+      const sets = raw.map((r) => convert(r, 0));
+      const main = { ...sets[sets.length - 1], durationMs };
+      return sets.length > 1 ? { ...main, statements: sets.length, sets } : main;
     }
-    return {
-      columns: [],
-      rows: [],
-      rowCount: 0,
-      affectedRows: typeof res.rowCount === 'number' ? res.rowCount : 0,
-      command: res.command,
-      truncated: false,
-      durationMs,
-    };
+    return convert(raw, durationMs);
   }
 
   async dispose(): Promise<void> {
@@ -650,6 +900,64 @@ export class SqliteDriver implements DbDriver {
     });
   }
 
+  async describeTable(_container: string, table: string): Promise<TableStructure> {
+    const q = (n: string) => quoteIdent('sqlite', n);
+    const master = await this.rows("SELECT type, sql FROM sqlite_master WHERE name = ? AND type IN ('table','view')", [table]);
+    if (master.length === 0) {
+      throw new Error(`Table ou vue introuvable : ${table}`);
+    }
+    const isView = master[0][0] === 'view';
+    const info = (await this.rows(`PRAGMA table_xinfo(${q(table)})`)).filter((r) => Number(r[6]) !== 1);
+    const columns: StructureColumn[] = info.map((r) => ({
+      name: String(r[1]),
+      type: String(r[2] ?? ''),
+      nullable: Number(r[3]) === 0 && Number(r[5]) === 0,
+      primaryKey: Number(r[5]) > 0,
+      default: r[4] === null ? null : String(r[4]),
+      extra: Number(r[6]) === 2 ? 'VIRTUAL GENERATED' : Number(r[6]) === 3 ? 'STORED GENERATED' : undefined,
+    }));
+
+    const indexes: IndexInfo[] = [];
+    const constraints: ConstraintInfo[] = [];
+    const pk = info.filter((r) => Number(r[5]) > 0).sort((a, b) => Number(a[5]) - Number(b[5]));
+    if (pk.length > 0) {
+      constraints.push({ name: 'PRIMARY KEY', kind: 'PRIMARY KEY', definition: `(${pk.map((r) => q(String(r[1]))).join(', ')})` });
+    }
+    if (!isView) {
+      for (const r of await this.rows(`PRAGMA index_list(${q(table)})`)) {
+        const name = String(r[1]);
+        const cols = (await this.rows(`PRAGMA index_info(${q(name)})`)).map((c) => (c[2] === null ? '(expression)' : String(c[2])));
+        const origin = String(r[3]);
+        indexes.push({ name, columns: cols, unique: Number(r[2]) === 1, primary: origin === 'pk' });
+        if (origin === 'u') {
+          constraints.push({ name, kind: 'UNIQUE', definition: `(${cols.map(q).join(', ')})` });
+        }
+      }
+      const fks = new Map<number, unknown[][]>();
+      for (const r of await this.rows(`PRAGMA foreign_key_list(${q(table)})`)) {
+        fks.set(Number(r[0]), [...(fks.get(Number(r[0])) ?? []), r]);
+      }
+      for (const [id, group] of fks) {
+        const rule = (v: unknown) => (String(v) === 'NO ACTION' ? '' : String(v));
+        const upd = rule(group[0][5]);
+        const del = rule(group[0][6]);
+        constraints.push({
+          name: `fk_${id}`,
+          kind: 'FOREIGN KEY',
+          definition:
+            `(${group.map((g) => q(String(g[3]))).join(', ')}) REFERENCES ${q(String(group[0][2]))} ` +
+            `(${group.map((g) => (g[4] === null ? '' : q(String(g[4])))).join(', ')})` +
+            (upd ? ` ON UPDATE ${upd}` : '') + (del ? ` ON DELETE ${del}` : ''),
+        });
+      }
+    }
+    const stmts = [String(master[0][1] ?? '')];
+    for (const r of await this.rows('SELECT sql FROM sqlite_master WHERE type = ? AND tbl_name = ? AND sql IS NOT NULL ORDER BY name', ['index', table])) {
+      stmts.push(String(r[0]));
+    }
+    return { isView, columns, indexes, constraints, ddl: stmts.filter(Boolean).map((x) => (x.endsWith(';') ? x : x + ';')).join('\n\n') };
+  }
+
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
     const started = Date.now();
     const db = await this.open();
@@ -680,6 +988,10 @@ export class SqliteDriver implements DbDriver {
         total = last.values.length;
         kept.push(...last.values.slice(0, max));
       }
+      if (results.length > 1) {
+        const sets = results.map((r) => this.pack(r.columns, r.values, max, 0));
+        return { ...sets[sets.length - 1], durationMs: Date.now() - started, statements: sets.length, sets };
+      }
     }
     return {
       columns,
@@ -687,6 +999,16 @@ export class SqliteDriver implements DbDriver {
       rowCount: total,
       truncated: total > max,
       durationMs: Date.now() - started,
+    };
+  }
+
+  private pack(columns: string[], values: unknown[][], max: number, durationMs: number): QueryResult {
+    return {
+      columns,
+      rows: values.slice(0, max).map((row) => row.map((v) => formatCell(v instanceof Uint8Array ? Buffer.from(v) : v))),
+      rowCount: values.length,
+      truncated: values.length > max,
+      durationMs,
     };
   }
 

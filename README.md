@@ -13,9 +13,10 @@ Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fich
 - **Garde-fous production** : connexions *lecture seule* et *production*, confirmation avant les requêtes dangereuses ; voir [Sécurité](#sécurité).
 - **Tunnel SSH intégré** ; voir [Tunnel SSH](#tunnel-ssh).
 - **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ dans la barre de l'éditeur. La **sélection** est exécutée si elle existe, sinon **tout le fichier**.
-- **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées.
+- **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées. Un script de plusieurs instructions affiche **un onglet par résultat**.
 - **Ajouter, modifier et supprimer des lignes** depuis l'aperçu d'une table : voir la section [Ajouter, modifier et supprimer des données](#ajouter-modifier-et-supprimer-des-données).
-- **Export CSV** du résultat affiché (pour un aperçu de table : la page courante).
+- **Structure d'une table** (index, contraintes, DDL) et **diagramme des relations** d'un schéma : voir [Structure et diagramme](#structure-et-diagramme).
+- **Export** en CSV, JSON ou instructions INSERT, de la page affichée ou de la table entière : voir [Exporter](#exporter).
 - Mots de passe stockés dans le **SecretStorage** de VS Code (jamais en clair dans les réglages).
 - Barre d'état : connexion utilisée par l'éditeur SQL actif (cliquer pour en changer).
 
@@ -80,6 +81,21 @@ Ne sont pas modifiables : les colonnes de clé primaire (elles restent saisissab
 
 Si la ligne a été modifiée ou supprimée par quelqu'un d'autre entre-temps, l'opération est annulée avec un message au lieu d'écraser silencieusement.
 
+## Structure et diagramme
+
+- **Structure** : clic droit sur une table ou une vue → *Afficher la structure*. Colonnes (type, clé primaire, obligatoire, valeur par défaut, auto-incrément / identité / colonne générée, commentaire), **index**, **contraintes** (clé primaire, unique, clé étrangère avec table référencée et actions, CHECK) et **DDL** reconstitué : *Copier le DDL* ou *Ouvrir dans un éditeur SQL*. Le DDL est celui du serveur (`SHOW CREATE TABLE`, SQLite) ou reconstitué depuis le catalogue (PostgreSQL) ; il est rejouable tel quel.
+- **Diagramme des relations** : clic droit sur une base / un schéma → *Diagramme des relations*. Les tables (colonnes, types, PK / FK) sont reliées par leurs clés étrangères ; une table est placée à droite de celles qu'elle référence. On peut **déplacer** les tables, **zoomer**, **chercher** une table, survoler une table pour mettre ses liens en évidence, passer en **clés seulement** pour alléger, **double-cliquer** une table pour afficher ses données. *Exporter en SVG* produit un fichier indépendant du thème ; *Copier (Mermaid)* donne un `erDiagram` à coller dans une documentation. Limites : 150 tables, clés étrangères sur une seule colonne (comme pour la navigation) ; les clés vers un autre schéma sont signalées par ↗ sans trait.
+
+## Exporter
+
+Le bouton **Exporter…** de la grille propose :
+
+- **CSV** (BOM UTF-8, séparateur du réglage `dbExplorer.csvSeparator`), **JSON** (tableau d'objets ; les nombres, les booléens PostgreSQL et les colonnes JSON sont typés quand le type de la colonne est connu) et **INSERT SQL** (instructions rejouables, lots de 100 lignes, valeurs échappées pour le SGBD ; tableaux PostgreSQL et binaires restitués correctement) ;
+- pour un aperçu de table : la **page affichée** (modifications comprises) ou la **table entière**. La table entière est relue sur le serveur par lots de 2 000 lignes, avec le **tri et le filtre** en cours, et écrite en continu dans le fichier : la mémoire reste bornée, une barre de progression permet d'**annuler** (le fichier partiel est alors supprimé). Une table modifiée pendant l'export peut donner des lignes manquantes ou en double : exportez sur une base calme si l'exactitude compte ;
+- pour le résultat d'une requête libre : les lignes affichées (au plus `dbExplorer.maxRows`) ; le nom de la table des `INSERT` est demandé.
+
+Les valeurs binaires de plus de 32 octets ne sont affichées que sous forme de taille : elles sont remplacées par `NULL` dans un export `INSERT` (l'extension le signale).
+
 ## Naviguer par les clés étrangères
 
 Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur une seule colonne) sont des liens (en-tête marqué ↗) : un clic ouvre la table référencée, filtrée sur la ligne visée. Une puce (`id = 10`, avec ✕ pour la retirer) rappelle le filtre, et le bouton **←** revient à la vue précédente, avec son tri, sa page et son filtre (20 niveaux). Le filtre texte se combine avec l'égalité, et la grille reste modifiable. Les clés composites ne sont pas suivies.
@@ -88,7 +104,7 @@ Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur 
 
 - **Autocomplétion** : mots-clés, bases / schémas, tables, colonnes ; les alias (`FROM clients c` → `c.`) sont compris. Le schéma est lu à la demande et gardé 5 minutes (actualiser la connexion le relit).
 - **Historique** : commande `DB Explorer: Historique des requêtes` (200 dernières, doublons fusionnés, la plus récente en premier) ; *Effacer l'historique des requêtes* le vide.
-- **Plusieurs instructions** : sous MySQL / MariaDB, un script est découpé et exécuté sur **une seule connexion** (tables temporaires, variables, transactions) ; le résultat de la dernière est affiché, et une erreur indique « Instruction k/N ».
+- **Plusieurs instructions** : sous MySQL / MariaDB, un script est découpé et exécuté sur **une seule connexion** (tables temporaires, variables, transactions) ; une erreur indique « Instruction k/N ». Le résultat de **chaque** instruction est affiché dans un onglet (PostgreSQL, MariaDB / MySQL et SQLite) ; la durée n'est indiquée que pour l'ensemble sous PostgreSQL et SQLite.
 - **Annulation** : `DB Explorer: Annuler la requête en cours` (ou l'indicateur dans la barre d'état) interrompt la requête côté serveur (`pg_cancel_backend`, `KILL QUERY`).
 
 ## Sécurité
@@ -116,7 +132,7 @@ Les fichiers SQLite sont ouverts avec **sql.js** (SQLite compilé en WebAssembly
 
 ## Limites connues
 
-- Plusieurs instructions : seul le résultat de la dernière est affiché.
+- Sous MariaDB, une colonne `JSON` est un alias de `LONGTEXT` : elle est exportée en JSON comme une chaîne.
 - Sous MySQL, si la clé primaire est générée par le serveur autrement que par auto-incrément (un `UUID()` par défaut, par exemple), la ligne est bien insérée mais ne peut pas être retrouvée : l'extension l'indique et il faut actualiser l'aperçu pour la voir. Sous PostgreSQL, la ligne est toujours relue.
 - Sous MySQL, les tables MyISAM ne supportent pas les transactions : la suppression « tout ou rien » ne s'y applique pas.
 - SQLite : lecture seule uniquement, pas d'annulation de requête.
@@ -138,6 +154,7 @@ npm test                                                 # unitaires + bout en b
 npm test pg                                              # une seule base : « pg » ou « my »
 ```
 
+- `test/features.js` : structure (DDL rejoué dans un autre schéma, structure identique), jeux de résultats multiples, exports (INSERT rejoués, JSON, lecture par lots, annulation) sur la vraie base. `test/er.test.js` et `test/structure.test.js` : disposition du diagramme et pages (jsdom).
 - `test/sqlite.test.js` : pilote SQLite sur un fichier créé à la volée (aucun serveur requis). `test/tunnel.test.js` : tunnel SSH contre un faux serveur SSH. `test/form.test.js` : formulaire de connexion.
 - `test/unit.test.js` : générateurs SQL (pagination, tri, filtre, UPDATE / INSERT / DELETE) et règles d'édition, sans base.
 - `test/e2e.js` : la vraie grille (jsdom) → panneau de résultats → pilote → vraie base : édition, insertion, suppression, transactions, pagination, tri, filtre, messages périmés ou forgés. Le jeu de données (`test/seed.js`) est recréé à chaque exécution : **n'utilisez que des bases jetables**.

@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
 import { ResultsPanel } from './resultsPanel';
+import { StructurePanels } from './structurePanel';
+import { DIAGRAM_CONSTS, DiagramPanels } from './diagramPanel';
+import { buildEdges, ErTable, layoutEr, toMermaid } from './erLayout';
 import { registerCompletion } from './completionProvider';
 import { QueryHistory } from './history';
 import { SchemaCache } from './schemaCache';
@@ -24,6 +27,8 @@ export function activate(context: vscode.ExtensionContext): void {
   manager = mgr;
   const tree = new ConnectionsTreeProvider(mgr);
   const results = new ResultsPanel();
+  const structures = new StructurePanels();
+  const diagrams = new DiagramPanels();
   const history = new QueryHistory(context.globalState);
   const schema = new SchemaCache((id) => mgr.getDriver(id));
   const running = new Set<CancelToken>();
@@ -168,7 +173,7 @@ export function activate(context: vscode.ExtensionContext): void {
               ? await driver.script(parts, token)
               : await driver.query(sql, undefined, token);
           record(true, result.durationMs);
-          results.showResult(cfg.name, sql, result, badges);
+          results.showResult(cfg.name, sql, result, badges, cfg.type);
         } catch (err) {
           record(false);
           results.showError(cfg.name, sql, token.requested ? 'Requête annulée.' : errorMessage(err), badges);
@@ -368,6 +373,98 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('dbExplorer.previewTable', async (node?: TableNode) => {
       if (node) {
         await previewTable(node);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.showStructure', async (node?: TableNode) => {
+      if (!node) {
+        return;
+      }
+      const cfg = node.connection;
+      try {
+        const structure = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Window, title: `DB Explorer : structure de ${node.table.name}…` },
+          async () => (await mgr.getDriver(cfg.id)).describeTable(node.container, node.table.name),
+        );
+        structures.show(`${cfg.id}/${node.container}/${node.table.name}`, {
+          title: cfg.type === 'sqlite' ? node.table.name : `${node.container}.${node.table.name}`,
+          connection: cfg.name,
+          badges: badgesOf(cfg),
+          structure,
+        });
+      } catch (err) {
+        vscode.window.showErrorMessage(`Structure de ${node.table.name} : ${errorMessage(err)}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.showDiagram', async (node?: ContainerNode) => {
+      if (!node) {
+        return;
+      }
+      const cfg = node.connection;
+      const MAX_TABLES = 150;
+      try {
+        const built = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `DB Explorer : diagramme de ${node.container}…` },
+          async (progress) => {
+            const driver = await mgr.getDriver(cfg.id);
+            const all = (await driver.listTables(node.container)).filter((t) => !t.isView);
+            const names = all.map((t) => t.name).sort((a, b) => a.localeCompare(b));
+            const kept = names.slice(0, MAX_TABLES);
+            const keptSet = new Set(kept);
+            const tables: ErTable[] = [];
+            let external = 0;
+            for (let i = 0; i < kept.length; i += 6) {
+              progress.report({ message: `${Math.min(i + 6, kept.length)} / ${kept.length} tables` });
+              const chunk = await Promise.all(
+                kept.slice(i, i + 6).map(async (name) => ({ name, cols: await driver.listColumns(node.container, name) })),
+              );
+              for (const { name, cols } of chunk) {
+                tables.push({
+                  name,
+                  columns: cols.map((c) => {
+                    const ref = c.references;
+                    const inside = ref && ref.container === node.container && keptSet.has(ref.table);
+                    if (ref && !inside) {
+                      external++;
+                    }
+                    return {
+                      name: c.name,
+                      type: c.type,
+                      pk: c.primaryKey,
+                      fk: inside ? { table: ref.table, column: ref.column } : undefined,
+                      external: ref && !inside ? `${ref.container}.${ref.table}` : undefined,
+                    };
+                  }),
+                });
+              }
+            }
+            return { tables, external, skipped: names.length - kept.length };
+          },
+        );
+        const edges = buildEdges(built.tables);
+        diagrams.show(
+          `${cfg.id}/${node.container}`,
+          {
+            title: cfg.type === 'sqlite' ? cfg.name : node.container,
+            connection: cfg.name,
+            badges: badgesOf(cfg),
+            tables: built.tables,
+            edges,
+            layouts: {
+              full: layoutEr(built.tables, edges, { keysOnly: false }),
+              keys: layoutEr(built.tables, edges, { keysOnly: true }),
+            },
+            external: built.external,
+            skipped: built.skipped,
+            consts: DIAGRAM_CONSTS,
+          },
+          toMermaid(built.tables, edges),
+          (table) =>
+            void previewTable(new TableNode(cfg, node.container, { name: table, isView: false })),
+        );
+      } catch (err) {
+        vscode.window.showErrorMessage(`Diagramme de ${node.container} : ${errorMessage(err)}`);
       }
     }),
 

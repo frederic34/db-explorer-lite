@@ -338,7 +338,8 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   await waitOp(pg, 'ok', 'delete avant csv');
   global.__saveUri = { fsPath: '/tmp/x.csv' };
   global.__written = undefined;
-  [...pg.d.querySelectorAll('.bar button')].find((b) => /CSV/.test(b.textContent)).click();
+  global.__picks = ['CSV', 'Page affichée'];
+  [...pg.d.querySelectorAll('.bar button')].find((b) => /Exporter/.test(b.textContent)).click();
   await until(() => global.__written, 'csv');
   const csv = Buffer.from(global.__written.c).toString('utf8');
   assert.ok(!csv.includes('Écho'), 'ligne supprimée absente du CSV');
