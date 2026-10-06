@@ -159,6 +159,14 @@ const READ_FIRST = new Set(['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'VALUES', 'TAB
 const SESSION_FIRST = new Set(['SET', 'BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'END', 'SAVEPOINT', 'RELEASE', 'RESET']);
 const DML = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE']);
 
+/** Pragmas SQLite qui ne font que lire (sans « = » ni argument qui les transformerait en réglage). */
+const SAFE_PRAGMAS = new Set([
+  'table_info', 'table_xinfo', 'table_list', 'index_list', 'index_info', 'index_xinfo',
+  'foreign_key_list', 'foreign_key_check', 'database_list', 'compile_options', 'collation_list',
+  'function_list', 'module_list', 'pragma_list', 'integrity_check', 'quick_check', 'page_count',
+  'page_size', 'freelist_count', 'encoding', 'schema_version', 'user_version', 'data_version',
+]);
+
 const words = (masked: string): string[] => masked.toUpperCase().match(/[A-Z_][A-Z0-9_]*/g) ?? [];
 
 /** Classe une instruction : lecture, session (SET, BEGIN…) ou écriture ; signale les cas dangereux. */
@@ -168,7 +176,10 @@ export function classify(st: Statement): StatementInfo {
   const has = (x: string) => w.includes(x);
   let kind: StatementKind;
 
-  if (READ_FIRST.has(first)) {
+  if (first === 'PRAGMA') {
+    const name = (w[1] === 'MAIN' || w[1] === 'TEMP' ? w[2] : w[1]) ?? '';
+    kind = SAFE_PRAGMAS.has(name.toLowerCase()) && !/=/.test(st.masked) ? 'read' : 'write';
+  } else if (READ_FIRST.has(first)) {
     // SELECT … INTO crée une table / un fichier ; SELECT … FOR UPDATE reste une lecture.
     kind = first === 'SELECT' && has('INTO') ? 'write' : 'read';
   } else if (first === 'WITH') {

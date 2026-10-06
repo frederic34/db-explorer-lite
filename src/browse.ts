@@ -52,9 +52,10 @@ function whereClause(b: BrowseQuery): { sql: string; params: unknown[] } {
         const m = mark(); // un seul paramètre, réutilisé pour chaque colonne
         parts.push('(' + cols.map((c) => `${quoteIdent('postgres', c.name)}::text ILIKE ${m} ESCAPE '${ESC}'`).join(' OR ') + ')');
       } else {
+        const asText = b.dbType === 'sqlite' ? 'TEXT' : 'CHAR';
         const preds = cols.map((c) => {
           params.push(pattern);
-          return `CAST(${quoteIdent('mysql', c.name)} AS CHAR) LIKE ? ESCAPE '${ESC}'`;
+          return `CAST(${quoteIdent(b.dbType, c.name)} AS ${asText}) LIKE ? ESCAPE '${ESC}'`;
         });
         parts.push('(' + preds.join(' OR ') + ')');
       }

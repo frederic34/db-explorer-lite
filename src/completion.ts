@@ -168,7 +168,7 @@ export function tablesNeeded(
 }
 
 function needsQuote(dbType: DbType, name: string): boolean {
-  return dbType === 'mysql' ? !/^[A-Za-z_][\w$]*$/.test(name) : !/^[a-z_][a-z0-9_$]*$/.test(name);
+  return dbType === 'postgres' ? !/^[a-z_][a-z0-9_$]*$/.test(name) : !/^[A-Za-z_][\w$]*$/.test(name);
 }
 const ident = (dbType: DbType, name: string): string => (needsQuote(dbType, name) ? quoteIdent(dbType, name) : name);
 

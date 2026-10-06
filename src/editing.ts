@@ -33,12 +33,18 @@ const PG_EDITABLE = new Set([
 
 export function isEditableType(dbType: DbType, columnType: string): boolean {
   const t = columnType.trim();
+  if (dbType === 'sqlite') {
+    return !/blob/i.test(t);
+  }
   return dbType === 'mysql' ? !MYSQL_NOT_EDITABLE.test(t) : PG_EDITABLE.has(t);
 }
 
 /** Colonne binaire / géométrique : sans sens en recherche texte. */
 export function isBinaryLike(dbType: DbType, columnType: string): boolean {
   const t = columnType.trim();
+  if (dbType === 'sqlite') {
+    return /blob/i.test(t);
+  }
   return dbType === 'mysql' ? MYSQL_NOT_EDITABLE.test(t) : t === 'bytea';
 }
 
@@ -84,7 +90,7 @@ export function planEditing(
   };
 }
 
-const placeholder = (dbType: DbType, n: number): string => (dbType === 'mysql' ? '?' : `$${n}`);
+const placeholder = (dbType: DbType, n: number): string => (dbType === 'postgres' ? `$${n}` : '?');
 
 const qualified = (dbType: DbType, container: string, table: string): string =>
   `${quoteIdent(dbType, container)}.${quoteIdent(dbType, table)}`;
@@ -130,7 +136,7 @@ export function buildInsert(
       sql:
         dbType === 'mysql'
           ? `INSERT INTO ${target} () VALUES ()`
-          : `INSERT INTO ${target} DEFAULT VALUES${returning}`,
+          : `INSERT INTO ${target} DEFAULT VALUES${returning}`, // PostgreSQL et SQLite
       params: [],
     };
   }

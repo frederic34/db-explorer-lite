@@ -1,6 +1,6 @@
 import { CancelToken } from './util';
 
-export type DbType = 'mysql' | 'postgres';
+export type DbType = 'mysql' | 'postgres' | 'sqlite';
 
 /** Tunnel SSH : la base est jointe à travers ce serveur (hôte et port de la base vus depuis lui). */
 export interface SshConfig {
@@ -19,6 +19,8 @@ export interface ConnectionConfig {
   host: string;
   port: number;
   user: string;
+  /** SQLite : chemin du fichier de base (lecture seule). */
+  file?: string;
   /** MySQL : optionnelle (vide = toutes les bases). PostgreSQL : obligatoire. */
   database?: string;
   ssl?: boolean;

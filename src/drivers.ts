@@ -1,4 +1,7 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as mysql from 'mysql2/promise';
+import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import { Pool, types as pgTypes } from 'pg';
 import {
   ColumnInfo,
@@ -494,6 +497,213 @@ export class PostgresDriver implements DbDriver {
   }
 }
 
+// ---------------------------------------------------------------------------
+// SQLite (fichier, lecture seule) — sql.js : SQLite compilé en WebAssembly, aucun module natif
+// ---------------------------------------------------------------------------
+
+/** Taille maximale d'un fichier chargé en mémoire. */
+export const SQLITE_MAX_BYTES = 300 * 1024 * 1024;
+
+let sqlJs: Promise<SqlJsStatic> | undefined;
+
+function loadSqlJs(): Promise<SqlJsStatic> {
+  if (!sqlJs) {
+    const candidates = [
+      path.join(__dirname, 'sql-wasm.wasm'),
+      path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+    ];
+    const wasm = candidates.find((f) => fs.existsSync(f));
+    if (!wasm) {
+      return Promise.reject(new Error('Moteur SQLite introuvable (sql-wasm.wasm manquant).'));
+    }
+    const wasmBinary = fs.readFileSync(wasm);
+    sqlJs = initSqlJs({ wasmBinary: wasmBinary.buffer.slice(wasmBinary.byteOffset, wasmBinary.byteOffset + wasmBinary.byteLength) as ArrayBuffer });
+    sqlJs.catch(() => (sqlJs = undefined));
+  }
+  return sqlJs;
+}
+
+const readOnlyError = (): Error =>
+  new Error('Les bases SQLite sont ouvertes en lecture seule : aucune écriture possible.');
+
+export class SqliteDriver implements DbDriver {
+  readonly type = 'sqlite' as const;
+  private db?: Database;
+  private stamp = '';
+
+  constructor(
+    private readonly cfg: ConnectionConfig,
+    private readonly opts: DriverOptions,
+  ) {}
+
+  /** (Re)charge le fichier s'il a changé depuis la dernière requête. */
+  private async open(): Promise<Database> {
+    const file = this.cfg.file;
+    if (!file) {
+      throw new Error('Aucun fichier SQLite indiqué.');
+    }
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(file);
+    } catch (err) {
+      throw new Error(`Fichier introuvable ou illisible : ${file} (${(err as NodeJS.ErrnoException).code ?? 'erreur'})`);
+    }
+    if (!st.isFile()) {
+      throw new Error(`Ce n'est pas un fichier : ${file}`);
+    }
+    if (st.size > SQLITE_MAX_BYTES) {
+      throw new Error(
+        `Fichier trop volumineux (${Math.round(st.size / 1048576)} Mo) : la limite est de ${SQLITE_MAX_BYTES / 1048576} Mo, le fichier est chargé en mémoire.`,
+      );
+    }
+    const stamp = `${st.mtimeMs}:${st.size}`;
+    if (this.db && stamp === this.stamp) {
+      return this.db;
+    }
+    const SQL = await loadSqlJs();
+    const bytes = fs.readFileSync(file);
+    this.db?.close();
+    this.db = undefined;
+    const db = new SQL.Database(bytes);
+    try {
+      db.exec('PRAGMA query_only = ON');
+      db.exec('SELECT count(*) FROM sqlite_master'); // échoue si ce n'est pas une base SQLite
+    } catch (err) {
+      db.close();
+      throw new Error(`Ce fichier n'est pas une base SQLite valide : ${(err as Error).message}`);
+    }
+    this.db = db;
+    this.stamp = stamp;
+    return db;
+  }
+
+  private async rows(sql: string, params: unknown[] = []): Promise<unknown[][]> {
+    const db = await this.open();
+    const stmt = db.prepare(sql);
+    try {
+      stmt.bind(params as never);
+      const out: unknown[][] = [];
+      while (stmt.step()) {
+        out.push(stmt.get() as unknown[]);
+      }
+      return out;
+    } finally {
+      stmt.free();
+    }
+  }
+
+  async listContainers(): Promise<string[]> {
+    await this.open();
+    return ['main'];
+  }
+
+  async listTables(): Promise<TableInfo[]> {
+    const rows = await this.rows(
+      "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite!_%' ESCAPE '!' ORDER BY name",
+    );
+    return rows.map((r) => ({ name: String(r[0]), isView: r[1] === 'view' }));
+  }
+
+  async listColumns(_container: string, table: string): Promise<ColumnInfo[]> {
+    const q = (n: string) => '"' + n.replace(/"/g, '""') + '"';
+    const info = await this.rows(`PRAGMA table_xinfo(${q(table)})`);
+    // cid, name, type, notnull, dflt_value, pk, hidden (1 = colonne cachée d'une table virtuelle, 2/3 = générée)
+    const cols = info.filter((r) => Number(r[6]) !== 1);
+    const pkCount = cols.filter((r) => Number(r[5]) > 0).length;
+
+    const refs = new Map<string, { container: string; table: string; column: string }>();
+    const fkRows = await this.rows(`PRAGMA foreign_key_list(${q(table)})`);
+    const byId = new Map<number, unknown[][]>();
+    for (const r of fkRows) {
+      byId.set(Number(r[0]), [...(byId.get(Number(r[0])) ?? []), r]);
+    }
+    for (const group of byId.values()) {
+      if (group.length !== 1) {
+        continue; // clé composite : non suivie
+      }
+      const [, , target, from, to] = group[0];
+      let column = to === null || to === undefined ? '' : String(to);
+      if (!column) {
+        // « REFERENCES t » sans colonne : clé primaire de la table cible
+        const tinfo = await this.rows(`PRAGMA table_info(${q(String(target))})`);
+        const pks = tinfo.filter((r) => Number(r[5]) > 0);
+        column = pks.length === 1 ? String(pks[0][1]) : '';
+      }
+      if (column) {
+        refs.set(String(from), { container: 'main', table: String(target), column });
+      }
+    }
+
+    return cols.map((r) => {
+      const type = String(r[2] ?? '');
+      const pk = Number(r[5]) > 0;
+      return {
+        name: String(r[1]),
+        type,
+        nullable: Number(r[3]) === 0 && !pk,
+        primaryKey: pk,
+        // INTEGER PRIMARY KEY (clé seule) = alias du rowid, auto-généré
+        hasDefault: r[4] !== null || (pk && pkCount === 1 && /^integer$/i.test(type)),
+        generated: Number(r[6]) >= 2,
+        references: refs.get(String(r[1])),
+      };
+    });
+  }
+
+  async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
+    const started = Date.now();
+    const db = await this.open();
+    const max = this.opts.maxRows();
+    let columns: string[] = [];
+    const kept: unknown[][] = [];
+    let total = 0;
+    if (params.length > 0) {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.bind(params as never);
+        columns = stmt.getColumnNames();
+        while (stmt.step()) {
+          total++;
+          if (kept.length < max) {
+            kept.push(stmt.get() as unknown[]);
+          }
+        }
+      } finally {
+        stmt.free();
+      }
+    } else {
+      // Plusieurs instructions possibles : on garde le résultat de la dernière qui renvoie des colonnes.
+      const results = db.exec(sql);
+      const last = results[results.length - 1];
+      if (last) {
+        columns = last.columns;
+        total = last.values.length;
+        kept.push(...last.values.slice(0, max));
+      }
+    }
+    return {
+      columns,
+      rows: kept.map((row) => row.map((v) => formatCell(v instanceof Uint8Array ? Buffer.from(v) : v))),
+      rowCount: total,
+      truncated: total > max,
+      durationMs: Date.now() - started,
+    };
+  }
+
+  async executeBatch(): Promise<number[]> {
+    throw readOnlyError();
+  }
+
+  async insertRow(): Promise<{ row?: (string | null)[]; insertId?: string }> {
+    throw readOnlyError();
+  }
+
+  async dispose(): Promise<void> {
+    this.db?.close();
+    this.db = undefined;
+  }
+}
+
 /**
  * `tlsServername` : nom d'hôte à vérifier dans le certificat quand on se connecte par un tunnel
  * (l'adresse réellement jointe est alors 127.0.0.1).
@@ -504,6 +714,9 @@ export function createDriver(
   opts: DriverOptions,
   tlsServername?: string,
 ): DbDriver {
+  if (cfg.type === 'sqlite') {
+    return new SqliteDriver(cfg, opts);
+  }
   return cfg.type === 'mysql'
     ? new MySqlDriver(cfg, password, opts, tlsServername)
     : new PostgresDriver(cfg, password, opts, tlsServername);

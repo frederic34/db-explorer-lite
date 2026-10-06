@@ -76,7 +76,7 @@ export class SchemaCache {
     return {
       dbType: cfg.type,
       containers: this.fresh(this.containers.get(id)) ?? [],
-      defaultContainer: cfg.type === 'mysql' ? cfg.database || undefined : 'public',
+      defaultContainer: cfg.type === 'mysql' ? cfg.database || undefined : cfg.type === 'sqlite' ? 'main' : 'public',
       tables: (c) => this.fresh(this.tables.get(`${id}\u0000${c}`)),
       columns: (c, t) => this.fresh(this.columns.get(`${id}\u0000${c}\u0000${t}`)),
     };

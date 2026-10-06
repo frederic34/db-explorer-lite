@@ -7,7 +7,7 @@ build();
 const run = (args) => spawnSync(process.execPath, args, { stdio: 'inherit', cwd: path.join(__dirname, '..') });
 
 let failed = false;
-if (run(['--test', 'test/unit.test.js', 'test/tunnel.test.js', 'test/form.test.js']).status !== 0) {
+if (run(['--test', 'test/unit.test.js', 'test/tunnel.test.js', 'test/form.test.js', 'test/sqlite.test.js']).status !== 0) {
   failed = true;
 }
 const only = process.argv[2]; // « pg » ou « my » pour n'en tester qu'une

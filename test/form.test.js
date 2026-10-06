@@ -186,3 +186,40 @@ test('erreur du test de connexion : message affiché, boutons réactivés', asyn
   assert.match(f.status().text, /Authentification SSH refusée/);
   assert.equal($(f.d, 'testBtn').disabled, false);
 });
+
+test('SQLite : champ fichier, serveur et sécurité masqués, enregistrement en lecture seule', async () => {
+  const mgr = manager();
+  const f = open(mgr);
+  f.d.querySelector('input[value=sqlite]').click();
+  assert.equal(f.hidden('fileBox'), false);
+  assert.equal(f.hidden('serverBox'), true);
+  assert.equal(f.hidden('secBox'), true);
+
+  $(f.d, 'saveBtn').click();                       // fichier manquant
+  await tick();
+  assert.equal(mgr.calls.save.length, 0);
+  assert.match($(f.d, 'err-file').textContent, /fichier/);
+
+  f.type('file', '/data/boutique.sqlite');
+  assert.equal($(f.d, 'name').value, 'boutique.sqlite');
+  $(f.d, 'saveBtn').click();
+  await tick();
+  assert.equal(mgr.calls.save.length, 1);
+  const cfg = mgr.calls.save[0].cfg;
+  assert.equal(cfg.type, 'sqlite');
+  assert.equal(cfg.file, '/data/boutique.sqlite');
+  assert.equal(cfg.readOnly, true);
+  assert.equal(cfg.ssh, undefined);
+
+  f.d.querySelector('input[value=mysql]').click();  // retour à un serveur
+  assert.equal(f.hidden('serverBox'), false);
+  assert.equal(f.hidden('fileBox'), true);
+});
+
+test('SQLite : bouton Parcourir → fichier choisi', async () => {
+  const f = open(manager());
+  f.d.querySelector('input[value=sqlite]').click();
+  $(f.d, 'pickFile').click();
+  await tick();
+  assert.ok(f.sent.some((m) => m.type === 'pickFile'));
+});

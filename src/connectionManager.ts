@@ -51,6 +51,9 @@ export class ConnectionManager {
 
   /** Crée ou met à jour une connexion. password / sshSecret === undefined : on garde l'ancien. */
   async save(cfg: ConnectionConfig, password: string | undefined, sshSecret?: string): Promise<void> {
+    if (cfg.type === 'sqlite') {
+      cfg = { ...cfg, readOnly: true, ssh: undefined, production: undefined };
+    }
     const all = this.list();
     const idx = all.findIndex((c) => c.id === cfg.id);
     if (idx >= 0) {

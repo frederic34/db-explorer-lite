@@ -2,13 +2,16 @@
 
 Extension VS Code légère pour **se connecter à une base de données, lister les tables, consulter les données et exécuter des requêtes SQL**.
 
-Bases prises en charge : **MySQL / MariaDB** et **PostgreSQL**.
+Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fichier, en lecture seule).
 
 ## Fonctionnalités
 
 - **Vue « DB Explorer »** dans la barre d'activité : connexions → bases (MySQL) ou schémas (PostgreSQL) → tables et vues → colonnes (type, clé primaire, NOT NULL).
 - **Aperçu des données** : icône « œil » au survol d'une table (ou clic droit → *Afficher les données*). Les données sont **paginées** ; le **tri** et le **filtre** portent sur toute la table, pas seulement sur la page affichée (voir [Parcourir une table](#parcourir-une-table)).
-- **Éditeur SQL** : clic droit → *Nouvelle requête SQL*, ou commande `DB Explorer: Nouvelle requête SQL`.
+- **Navigation par clés étrangères** : cliquez sur une valeur de clé étrangère pour ouvrir la ligne référencée ; voir [Naviguer par les clés étrangères](#naviguer-par-les-clés-étrangères).
+- **Éditeur SQL** : clic droit → *Nouvelle requête SQL*, ou commande `DB Explorer: Nouvelle requête SQL`. Autocomplétion, historique, annulation : voir [Éditeur SQL](#éditeur-sql).
+- **Garde-fous production** : connexions *lecture seule* et *production*, confirmation avant les requêtes dangereuses ; voir [Sécurité](#sécurité).
+- **Tunnel SSH intégré** ; voir [Tunnel SSH](#tunnel-ssh).
 - **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ dans la barre de l'éditeur. La **sélection** est exécutée si elle existe, sinon **tout le fichier**.
 - **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées.
 - **Ajouter, modifier et supprimer des lignes** depuis l'aperçu d'une table : voir la section [Ajouter, modifier et supprimer des données](#ajouter-modifier-et-supprimer-des-données).
@@ -34,6 +37,8 @@ Ou dans VS Code : `Extensions` → `…` → *Installer à partir d'un VSIX…*
 2. Déplier la connexion pour parcourir les tables.
 3. Cliquer sur l'icône d'aperçu d'une table, ou ouvrir une nouvelle requête et l'exécuter.
 
+> SQLite : choisissez le type *SQLite* puis le fichier (bouton *Parcourir…*) ; il n'y a ni hôte, ni utilisateur, ni mot de passe.
+
 > MySQL : si le champ « base de données » est laissé vide, toutes les bases du serveur sont listées. PostgreSQL : le champ est obligatoire, les schémas de cette base sont listés.
 
 ## Réglages
@@ -43,6 +48,8 @@ Ou dans VS Code : `Extensions` → `…` → *Installer à partir d'un VSIX…*
 | `dbExplorer.previewLimit` | `200` | Lignes par page au départ dans l'aperçu d'une table (modifiable dans l'aperçu, 1 à 1000) |
 | `dbExplorer.maxRows` | `5000` | Lignes maximum conservées pour un résultat de requête |
 | `dbExplorer.showSystemSchemas` | `false` | Afficher `information_schema`, `mysql`, `pg_catalog`… |
+| `dbExplorer.confirmDangerous` | `true` | Demander confirmation avant `UPDATE` / `DELETE` sans `WHERE`, `DROP`, `TRUNCATE`, `ALTER … DROP` |
+| `dbExplorer.confirmOnProduction` | `true` | Demander confirmation avant toute écriture sur une connexion marquée *production* |
 | `dbExplorer.csvSeparator` | `,` | Séparateur CSV (`,`, `;` ou `tab`) — `;` convient mieux à Excel en français |
 
 ## Parcourir une table
@@ -73,13 +80,46 @@ Ne sont pas modifiables : les colonnes de clé primaire (elles restent saisissab
 
 Si la ligne a été modifiée ou supprimée par quelqu'un d'autre entre-temps, l'opération est annulée avec un message au lieu d'écraser silencieusement.
 
+## Naviguer par les clés étrangères
+
+Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur une seule colonne) sont des liens (en-tête marqué ↗) : un clic ouvre la table référencée, filtrée sur la ligne visée. Une puce (`id = 10`, avec ✕ pour la retirer) rappelle le filtre, et le bouton **←** revient à la vue précédente, avec son tri, sa page et son filtre (20 niveaux). Le filtre texte se combine avec l'égalité, et la grille reste modifiable. Les clés composites ne sont pas suivies.
+
+## Éditeur SQL
+
+- **Autocomplétion** : mots-clés, bases / schémas, tables, colonnes ; les alias (`FROM clients c` → `c.`) sont compris. Le schéma est lu à la demande et gardé 5 minutes (actualiser la connexion le relit).
+- **Historique** : commande `DB Explorer: Historique des requêtes` (200 dernières, doublons fusionnés, la plus récente en premier) ; *Effacer l'historique des requêtes* le vide.
+- **Plusieurs instructions** : sous MySQL / MariaDB, un script est découpé et exécuté sur **une seule connexion** (tables temporaires, variables, transactions) ; le résultat de la dernière est affiché, et une erreur indique « Instruction k/N ».
+- **Annulation** : `DB Explorer: Annuler la requête en cours` (ou l'indicateur dans la barre d'état) interrompt la requête côté serveur (`pg_cancel_backend`, `KILL QUERY`).
+
+## Sécurité
+
+Dans le formulaire de connexion, rubrique **Sécurité** :
+
+- **Lecture seule** : aucune écriture, ni par la grille ni par l'éditeur SQL. C'est aussi imposé **côté serveur** (`default_transaction_read_only` pour PostgreSQL, `SET SESSION TRANSACTION READ ONLY` pour MySQL), et une instruction qui tenterait de lever la protection est refusée.
+- **Production** : badge **PROD** (rouge) dans l'arbre et les résultats, et confirmation avant toute écriture.
+- Dans tous les cas, `UPDATE` / `DELETE` sans `WHERE`, `DROP`, `TRUNCATE` et `ALTER … DROP` demandent confirmation (réglage `confirmDangerous`).
+
+L'analyse est faite par un lecteur SQL qui ignore commentaires et chaînes ; elle complète la protection du serveur sans la remplacer.
+
+## Tunnel SSH
+
+Cochez **Se connecter à travers un tunnel SSH** dans le formulaire : l'hôte et le port de la base sont alors ceux vus *depuis le serveur SSH* (souvent `localhost`). Authentification par mot de passe, clé privée (avec phrase secrète éventuelle) ou agent SSH. À la première connexion, l'**empreinte** du serveur est demandée puis mémorisée et vérifiée ensuite ; commande `DB Explorer: Oublier les serveurs SSH approuvés` pour la réinitialiser. Le tunnel se rétablit seul après une coupure. Mots de passe et phrases secrètes sont dans le SecretStorage.
+
+## SQLite
+
+Les fichiers SQLite sont ouverts avec **sql.js** (SQLite compilé en WebAssembly : rien à installer, aucun module natif) :
+
+- **lecture seule**, toujours : le fichier n'est jamais modifié ; les écritures sont refusées ;
+- le fichier est **chargé en mémoire** (300 Mo maximum) et **relu automatiquement** s'il change sur le disque ;
+- tables, vues, colonnes, clés étrangères, pagination, tri, filtre et export CSV fonctionnent comme pour les autres bases ;
+- une requête très longue ne peut pas être annulée (SQLite s'exécute dans le processus de l'extension).
+
 ## Limites connues
 
-- Pas de requêtes multiples en une exécution côté MySQL (une instruction à la fois). PostgreSQL accepte plusieurs instructions mais n'affiche que le résultat de la dernière.
-- Les requêtes sont exécutées telles quelles, **sans confirmation** : attention aux `UPDATE` / `DELETE` sans `WHERE` sur une base de production.
+- Plusieurs instructions : seul le résultat de la dernière est affiché.
 - Sous MySQL, si la clé primaire est générée par le serveur autrement que par auto-incrément (un `UUID()` par défaut, par exemple), la ligne est bien insérée mais ne peut pas être retrouvée : l'extension l'indique et il faut actualiser l'aperçu pour la voir. Sous PostgreSQL, la ligne est toujours relue.
 - Sous MySQL, les tables MyISAM ne supportent pas les transactions : la suppression « tout ou rien » ne s'y applique pas.
-- Pas de tunnel SSH intégré : utiliser un tunnel externe (`ssh -L`) et se connecter sur `localhost`.
+- SQLite : lecture seule uniquement, pas d'annulation de requête.
 
 ## Développement
 
@@ -98,6 +138,7 @@ npm test                                                 # unitaires + bout en b
 npm test pg                                              # une seule base : « pg » ou « my »
 ```
 
+- `test/sqlite.test.js` : pilote SQLite sur un fichier créé à la volée (aucun serveur requis). `test/tunnel.test.js` : tunnel SSH contre un faux serveur SSH. `test/form.test.js` : formulaire de connexion.
 - `test/unit.test.js` : générateurs SQL (pagination, tri, filtre, UPDATE / INSERT / DELETE) et règles d'édition, sans base.
 - `test/e2e.js` : la vraie grille (jsdom) → panneau de résultats → pilote → vraie base : édition, insertion, suppression, transactions, pagination, tri, filtre, messages périmés ou forgés. Le jeu de données (`test/seed.js`) est recréé à chaque exécution : **n'utilisez que des bases jetables**.
 - Sans base joignable, les tests de bout en bout sont ignorés en local ; en CI (ou avec `DBX_REQUIRE_DB=1`) ils échouent. Les connexions se règlent par `TEST_PG_*` / `TEST_MYSQL_*` (voir `test/config.js`).

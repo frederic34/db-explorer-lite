@@ -14,6 +14,8 @@ interface FormValues {
   user: string;
   password: string;
   database: string;
+  /** SQLite : chemin du fichier. */
+  file: string;
   ssl: boolean;
   readOnly: boolean;
   production: boolean;
@@ -63,6 +65,7 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
       port: String(existing?.port ?? defaultPort(type)),
       user: existing?.user ?? defaultUser(type),
       database: existing?.database ?? (type === 'postgres' ? 'postgres' : ''),
+      file: existing?.file ?? '',
       ssl: existing?.ssl ?? false,
       readOnly: existing?.readOnly ?? false,
       production: existing?.production ?? false,
@@ -78,6 +81,24 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
 
   /** Valide les champs ; retourne un message d'erreur, ou la configuration prête à l'emploi. */
   const toConfig = (v: FormValues): { error: string } | { config: ConnectionConfig } => {
+    if (v.type === 'sqlite') {
+      const file = v.file.trim();
+      if (!file) {
+        return { error: 'Indiquez le fichier de la base SQLite.' };
+      }
+      return {
+        config: {
+          id: existing?.id ?? randomUUID(),
+          name: v.name.trim() || path.basename(file),
+          type: 'sqlite',
+          host: '',
+          port: 0,
+          user: '',
+          file,
+          readOnly: true,
+        },
+      };
+    }
     const port = Number(v.port);
     if (!v.host.trim()) {
       return { error: "L'hôte est obligatoire." };
@@ -142,6 +163,18 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
   panel.webview.onDidReceiveMessage(async (msg: { type?: string; values?: FormValues }) => {
     if (msg?.type === 'cancel') {
       panel.dispose();
+      return;
+    }
+    if (msg?.type === 'pickFile') {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        title: 'Base SQLite',
+        openLabel: 'Choisir',
+        filters: { 'Bases SQLite': ['db', 'sqlite', 'sqlite3', 'db3', 's3db'], 'Tous les fichiers': ['*'] },
+      });
+      if (picked?.[0]) {
+        void panel.webview.postMessage({ type: 'filePicked', path: picked[0].fsPath });
+      }
       return;
     }
     if (msg?.type === 'pickKey') {
@@ -278,7 +311,7 @@ const SCRIPT = String.raw`
   var form = $('form'), status = $('status');
   var fields = { name: $('name'), host: $('host'), port: $('port'), user: $('user'),
                  password: $('password'), database: $('database'),
-                 sshHost: $('sshHost'), sshPort: $('sshPort'), sshUser: $('sshUser'), sshKey: $('sshKey') };
+                 sshHost: $('sshHost'), sshPort: $('sshPort'), sshUser: $('sshUser'), sshKey: $('sshKey'), file: $('file') };
 
   function currentType() { return form.elements['type'].value; }
 
@@ -302,6 +335,7 @@ const SCRIPT = String.raw`
   }
   $('sshOn').addEventListener('change', applySsh);
   $('sshAuth').addEventListener('change', applySsh);
+  $('pickFile').addEventListener('click', function () { vscode.postMessage({ type: 'pickFile' }); });
   $('pickKey').addEventListener('click', function () { vscode.postMessage({ type: 'pickKey' }); });
   if (init.editing && v.sshOn) { $('sshSecret').placeholder = 'Laisser vide pour conserver le secret actuel'; }
   if (init.editing) {
@@ -315,14 +349,24 @@ const SCRIPT = String.raw`
 
   function suggestName() {
     if (touched.name) { return; }
+    if (currentType() === 'sqlite') {
+      var f = fields.file.value.trim().replace(/[\\/]+$/, '');
+      fields.name.value = f ? f.split(/[\\/]/).pop() : '';
+      return;
+    }
     var h = fields.host.value.trim(), u = fields.user.value.trim(), d = fields.database.value.trim();
     fields.name.value = h ? ((u ? u + '@' : '') + h + (d ? '/' + d : '')) : '';
   }
-  ['host', 'user', 'database'].forEach(function (k) { fields[k].addEventListener('input', suggestName); });
+  ['host', 'user', 'database', 'file'].forEach(function (k) { fields[k].addEventListener('input', suggestName); });
   suggestName();
 
   function applyType() {
     var t = currentType();
+    var lite = t === 'sqlite';
+    $('fileBox').hidden = !lite;
+    $('serverBox').hidden = lite;
+    $('secBox').hidden = lite;
+    if (lite) { suggestName(); clearStatus(); return; }
     if (!touched.port) { fields.port.value = DEFAULT_PORT[t]; }
     if (!touched.user) { fields.user.value = DEFAULT_USER[t]; }
     if (!touched.database) { fields.database.value = t === 'postgres' ? 'postgres' : ''; }
@@ -388,6 +432,13 @@ const SCRIPT = String.raw`
 
   function validate(focusFirst) {
     var errors = [];
+    if (currentType() === 'sqlite') {
+      var msg = !fields.file.value.trim() ? 'Indiquez le fichier de la base SQLite.' : '';
+      setErr('file', msg);
+      if (msg && focusFirst) { fields.file.focus(); }
+      return !msg;
+    }
+    setErr('file', '');
     var port = Number(fields.port.value);
     var checks = [
       ['host', !fields.host.value.trim() ? "L'hôte est obligatoire." : ''],
@@ -415,7 +466,7 @@ const SCRIPT = String.raw`
   // --- Actions ---------------------------------------------------------------------------
   function values() {
     return {
-      type: currentType(), name: fields.name.value, host: fields.host.value, port: fields.port.value,
+      type: currentType(), file: fields.file.value, name: fields.name.value, host: fields.host.value, port: fields.port.value,
       user: fields.user.value, password: fields.password.value, database: fields.database.value,
       ssl: $('ssl').checked, readOnly: $('readOnly').checked, production: $('production').checked,
       sshOn: $('sshOn').checked, sshHost: $('sshHost').value, sshPort: $('sshPort').value, sshUser: $('sshUser').value,
@@ -443,6 +494,7 @@ const SCRIPT = String.raw`
 
   window.addEventListener('message', function (event) {
     var m = event.data;
+    if (m && m.type === 'filePicked') { fields.file.value = m.path; suggestName(); return; }
     if (m && m.type === 'keyPicked') { $('sshKey').value = m.path; return; }
     if (!m || m.type !== 'result') { return; }
     setBusy(false);
@@ -475,9 +527,21 @@ function buildHtml(init: InitData, nonce: string): string {
       <div class="types">
         <label><input type="radio" name="type" value="mysql"> MySQL / MariaDB</label>
         <label><input type="radio" name="type" value="postgres"> PostgreSQL</label>
+        <label><input type="radio" name="type" value="sqlite"> SQLite</label>
       </div>
     </fieldset>
 
+    <div id="fileBox" hidden>
+      <label class="field" for="file">Fichier de la base</label>
+      <div class="pwd">
+        <input type="text" id="file" spellcheck="false" autocomplete="off" placeholder="/chemin/vers/base.db">
+        <button type="button" id="pickFile">Parcourir…</button>
+      </div>
+      <div class="hint">Ouverte en <strong>lecture seule</strong> : le fichier n'est jamais modifié, et il est relu automatiquement s'il change. Il est chargé en mémoire (300 Mo maximum).</div>
+      <div class="err" id="err-file" role="alert"></div>
+    </div>
+
+    <div id="serverBox">
     <details>
       <summary>Importer depuis une URL de connexion</summary>
       <div class="pwd">
@@ -575,11 +639,13 @@ function buildHtml(init: InitData, nonce: string): string {
       </div>
     </fieldset>
 
-    <fieldset>
+    <fieldset id="secBox">
       <legend>Sécurité</legend>
       <label class="check"><input type="checkbox" id="production"> Base de production (badge d'avertissement, confirmation avant toute écriture)</label>
       <label class="check" style="margin-top:6px"><input type="checkbox" id="readOnly"> Lecture seule (aucune écriture : grille et éditeur SQL, refusée aussi par le serveur)</label>
     </fieldset>
+
+    </div>
 
     <div>
       <label class="field" for="name">Nom affiché</label>
