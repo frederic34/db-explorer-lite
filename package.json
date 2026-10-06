@@ -2,8 +2,18 @@
   "name": "db-explorer-lite",
   "displayName": "DB Explorer Lite",
   "description": "Se connecter à MySQL/MariaDB, PostgreSQL ou SQLite, parcourir les tables, consulter et exporter les données, exécuter des requêtes SQL, afficher la structure et le diagramme des relations.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "local",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frederic34/db-explorer-lite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/frederic34/db-explorer-lite/issues"
+  },
+  "homepage": "https://github.com/frederic34/db-explorer-lite#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -304,12 +314,12 @@
   "scripts": {
     "copy:wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('node_modules/sql.js/dist/sql-wasm.wasm','dist/sql-wasm.wasm')\"",
     "typecheck": "tsc --noEmit -p ./",
-    "build": "npm run typecheck && npm run copy:wasm && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap",
-    "build:prod": "npm run typecheck && npm run copy:wasm && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --minify",
-    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
-    "package": "npm run build:prod && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "build": "npm run typecheck && npm run copy:wasm && esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap",
+    "build:prod": "npm run typecheck && npm run copy:wasm && esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --minify",
+    "watch": "esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
+    "package": "npm run build:prod && vsce package --no-dependencies",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js"
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js"
   },
   "dependencies": {
     "mysql2": "^3.11.0",

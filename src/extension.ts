@@ -168,10 +168,19 @@ export function activate(context: vscode.ExtensionContext): void {
           // MySQL n'accepte qu'une instruction par requête : un script est exécuté instruction par
           // instruction, sur une même connexion.
           const parts = splitStatements(sql, cfg.type);
-          const result =
-            driver.script && parts.length > 1
-              ? await driver.script(parts, token)
-              : await driver.query(sql, undefined, token);
+          let result;
+          try {
+            result =
+              driver.script && parts.length > 1
+                ? await driver.script(parts, token)
+                : await driver.query(sql, undefined, token);
+          } finally {
+            // Même en cas d'erreur : un script a pu modifier la structure avant d'échouer.
+            if (verdict.statements.some((s) => s.ddl)) {
+              schema.invalidate(connectionId);
+              tree.refreshConnection(connectionId);
+            }
+          }
           record(true, result.durationMs);
           results.showResult(cfg.name, sql, result, badges, cfg.type);
         } catch (err) {

@@ -127,15 +127,15 @@ Les fichiers SQLite sont ouverts avec **sql.js** (SQLite compilé en WebAssembly
 
 - **lecture seule**, toujours : le fichier n'est jamais modifié ; les écritures sont refusées ;
 - le fichier est **chargé en mémoire** (300 Mo maximum) et **relu automatiquement** s'il change sur le disque ;
+- le moteur tourne dans un **thread séparé** : une requête longue ne bloque pas VS Code et peut être **annulée** (le fichier est alors rechargé à la requête suivante) ;
 - tables, vues, colonnes, clés étrangères, pagination, tri, filtre et export CSV fonctionnent comme pour les autres bases ;
-- une requête très longue ne peut pas être annulée (SQLite s'exécute dans le processus de l'extension).
 
 ## Limites connues
 
 - Sous MariaDB, une colonne `JSON` est un alias de `LONGTEXT` : elle est exportée en JSON comme une chaîne.
 - Sous MySQL, si la clé primaire est générée par le serveur autrement que par auto-incrément (un `UUID()` par défaut, par exemple), la ligne est bien insérée mais ne peut pas être retrouvée : l'extension l'indique et il faut actualiser l'aperçu pour la voir. Sous PostgreSQL, la ligne est toujours relue.
 - Sous MySQL, les tables MyISAM ne supportent pas les transactions : la suppression « tout ou rien » ne s'y applique pas.
-- SQLite : lecture seule uniquement, pas d'annulation de requête.
+- SQLite : lecture seule uniquement. Annuler une requête arrête aussi les autres requêtes SQLite en cours sur la même connexion.
 
 ## Développement
 
@@ -169,3 +169,9 @@ Un workflow GitHub Actions (`.github/workflows/release.yml`) construit l'extensi
 npm version patch          # met à jour package.json et crée le tag vX.Y.Z
 git push --follow-tags
 ```
+
+## Licence, sécurité, historique
+
+- Licence [MIT](LICENSE).
+- Signaler une faille : voir [SECURITY.md](SECURITY.md) (signalement privé GitHub, et ce que l'extension fait de vos données).
+- Historique des versions : [CHANGELOG.md](CHANGELOG.md).

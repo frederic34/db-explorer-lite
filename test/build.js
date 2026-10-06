@@ -17,6 +17,8 @@ exports.build = () =>
       tunnel: path.join(root, 'src/tunnel.ts'),
       form: path.join(root, 'src/connectionForm.ts'),
       manager: path.join(root, 'src/connectionManager.ts'),
+      sqliteWorker: path.join(root, 'src/sqliteWorker.ts'),
+      tree: path.join(root, 'src/treeProvider.ts'),
       erLayout: path.join(root, 'src/erLayout.ts'),
       diagramPanel: path.join(root, 'src/diagramPanel.ts'),
       exporter: path.join(root, 'src/exporter.ts'),

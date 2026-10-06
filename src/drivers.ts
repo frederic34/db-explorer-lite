@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as mysql from 'mysql2/promise';
-import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
+import { Worker } from 'worker_threads';
 import { Pool, types as pgTypes } from 'pg';
 import {
   ColumnInfo,
@@ -16,7 +16,10 @@ import {
   TableStructure,
   WriteStatement,
 } from './types';
+import { RawSet, SQLITE_MAX_BYTES, WorkerData, WorkerRequest, WorkerResponse } from './sqliteShared';
 import { CancelToken, quoteIdent, repeatUntilDone } from './util';
+
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
 function mismatch(actual: number, expected: number): Error {
   return new Error(
@@ -751,99 +754,119 @@ export class PostgresDriver implements DbDriver {
 // SQLite (fichier, lecture seule) — sql.js : SQLite compilé en WebAssembly, aucun module natif
 // ---------------------------------------------------------------------------
 
-/** Taille maximale d'un fichier chargé en mémoire. */
-export const SQLITE_MAX_BYTES = 300 * 1024 * 1024;
-
-let sqlJs: Promise<SqlJsStatic> | undefined;
-
-function loadSqlJs(): Promise<SqlJsStatic> {
-  if (!sqlJs) {
-    const candidates = [
-      path.join(__dirname, 'sql-wasm.wasm'),
-      path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-    ];
-    const wasm = candidates.find((f) => fs.existsSync(f));
-    if (!wasm) {
-      return Promise.reject(new Error('Moteur SQLite introuvable (sql-wasm.wasm manquant).'));
-    }
-    const wasmBinary = fs.readFileSync(wasm);
-    sqlJs = initSqlJs({ wasmBinary: wasmBinary.buffer.slice(wasmBinary.byteOffset, wasmBinary.byteOffset + wasmBinary.byteLength) as ArrayBuffer });
-    sqlJs.catch(() => (sqlJs = undefined));
-  }
-  return sqlJs;
-}
+export { SQLITE_MAX_BYTES };
 
 const readOnlyError = (): Error =>
   new Error('Les bases SQLite sont ouvertes en lecture seule : aucune écriture possible.');
 
+/** Premier de ces chemins qui existe : fichier installé avec l'extension (dist/) ou, en développement, node_modules. */
+function findFile(...candidates: string[]): string {
+  const found = candidates.find((f) => fs.existsSync(f));
+  if (!found) {
+    throw new Error(`Moteur SQLite introuvable (${path.basename(candidates[0])} manquant).`);
+  }
+  return found;
+}
+
+interface PendingCall {
+  worker: Worker;
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
+
+/**
+ * SQLite en lecture seule. Le moteur (sql.js) tourne dans un thread de travail : l'extension n'est
+ * jamais bloquée par une requête longue, et l'annulation arrête simplement le thread (le fichier
+ * est rechargé à la requête suivante).
+ */
 export class SqliteDriver implements DbDriver {
   readonly type = 'sqlite' as const;
-  private db?: Database;
-  private stamp = '';
+  private worker?: Worker;
+  private seq = 0;
+  private readonly pending = new Map<number, PendingCall>();
 
   constructor(
     private readonly cfg: ConnectionConfig,
     private readonly opts: DriverOptions,
   ) {}
 
-  /** (Re)charge le fichier s'il a changé depuis la dernière requête. */
-  private async open(): Promise<Database> {
-    const file = this.cfg.file;
-    if (!file) {
-      throw new Error('Aucun fichier SQLite indiqué.');
+  private start(): Worker {
+    if (this.worker) {
+      return this.worker;
     }
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(file);
-    } catch (err) {
-      throw new Error(`Fichier introuvable ou illisible : ${file} (${(err as NodeJS.ErrnoException).code ?? 'erreur'})`);
+    const data: WorkerData = {
+      file: this.cfg.file ?? '',
+      wasmPath: findFile(
+        path.join(__dirname, 'sql-wasm.wasm'),
+        path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+      ),
+    };
+    const worker = new Worker(findFile(path.join(__dirname, 'sqliteWorker.js')), { workerData: data });
+    worker.on('message', (m: WorkerResponse) => {
+      const call = this.pending.get(m.id);
+      if (!call) {
+        return;
+      }
+      this.pending.delete(m.id);
+      this.idle(worker);
+      if (m.ok) {
+        call.resolve(m.result);
+      } else {
+        call.reject(new Error(m.error));
+      }
+    });
+    worker.on('error', (err) => this.drop(worker, err));
+    worker.on('exit', () => this.drop(worker, new Error("Le moteur SQLite s'est arrêté.")));
+    // Après les écouteurs : en ajouter un re-référence le thread. Un pilote oublié ne doit pas retenir le processus.
+    worker.unref();
+    this.worker = worker;
+    return worker;
+  }
+
+  /** Oublie ce thread et fait échouer les appels qui l'attendaient. */
+  private drop(worker: Worker, err: Error): void {
+    if (this.worker === worker) {
+      this.worker = undefined;
     }
-    if (!st.isFile()) {
-      throw new Error(`Ce n'est pas un fichier : ${file}`);
+    for (const [id, call] of this.pending) {
+      if (call.worker === worker) {
+        this.pending.delete(id);
+        call.reject(err);
+      }
     }
-    if (st.size > SQLITE_MAX_BYTES) {
-      throw new Error(
-        `Fichier trop volumineux (${Math.round(st.size / 1048576)} Mo) : la limite est de ${SQLITE_MAX_BYTES / 1048576} Mo, le fichier est chargé en mémoire.`,
-      );
+  }
+
+  /** Thread au repos : il ne doit pas retenir le processus ; avec des appels en attente, il le doit. */
+  private idle(worker: Worker): void {
+    if (![...this.pending.values()].some((c) => c.worker === worker)) {
+      worker.unref();
     }
-    const stamp = `${st.mtimeMs}:${st.size}`;
-    if (this.db && stamp === this.stamp) {
-      return this.db;
+  }
+
+  private call<T>(req: DistributiveOmit<WorkerRequest, 'id'>, cancel?: CancelToken): Promise<T> {
+    if (cancel?.requested) {
+      return Promise.reject(new Error('Requête annulée.'));
     }
-    const SQL = await loadSqlJs();
-    const bytes = fs.readFileSync(file);
-    this.db?.close();
-    this.db = undefined;
-    const db = new SQL.Database(bytes);
-    try {
-      db.exec('PRAGMA query_only = ON');
-      db.exec('SELECT count(*) FROM sqlite_master'); // échoue si ce n'est pas une base SQLite
-    } catch (err) {
-      db.close();
-      throw new Error(`Ce fichier n'est pas une base SQLite valide : ${(err as Error).message}`);
-    }
-    this.db = db;
-    this.stamp = stamp;
-    return db;
+    const worker = this.start();
+    const id = ++this.seq;
+    const done = new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { worker, resolve: resolve as (v: unknown) => void, reject });
+      worker.ref();
+      worker.postMessage({ id, ...req });
+      cancel?.attach(async () => {
+        void worker.terminate();
+        this.drop(worker, new Error('Requête annulée.'));
+      });
+    });
+    return done.finally(() => cancel?.detach());
   }
 
   private async rows(sql: string, params: unknown[] = []): Promise<unknown[][]> {
-    const db = await this.open();
-    const stmt = db.prepare(sql);
-    try {
-      stmt.bind(params as never);
-      const out: unknown[][] = [];
-      while (stmt.step()) {
-        out.push(stmt.get() as unknown[]);
-      }
-      return out;
-    } finally {
-      stmt.free();
-    }
+    return this.call<unknown[][]>({ op: 'rows', sql, params });
   }
 
   async listContainers(): Promise<string[]> {
-    await this.open();
+    await this.call({ op: 'open' });
     return ['main'];
   }
 
@@ -958,56 +981,24 @@ export class SqliteDriver implements DbDriver {
     return { isView, columns, indexes, constraints, ddl: stmts.filter(Boolean).map((x) => (x.endsWith(';') ? x : x + ';')).join('\n\n') };
   }
 
-  async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
+  async query(sql: string, params: unknown[] = [], cancel?: CancelToken): Promise<QueryResult> {
     const started = Date.now();
-    const db = await this.open();
     const max = this.opts.maxRows();
-    let columns: string[] = [];
-    const kept: unknown[][] = [];
-    let total = 0;
-    if (params.length > 0) {
-      const stmt = db.prepare(sql);
-      try {
-        stmt.bind(params as never);
-        columns = stmt.getColumnNames();
-        while (stmt.step()) {
-          total++;
-          if (kept.length < max) {
-            kept.push(stmt.get() as unknown[]);
-          }
-        }
-      } finally {
-        stmt.free();
-      }
-    } else {
-      // Plusieurs instructions possibles : on garde le résultat de la dernière qui renvoie des colonnes.
-      const results = db.exec(sql);
-      const last = results[results.length - 1];
-      if (last) {
-        columns = last.columns;
-        total = last.values.length;
-        kept.push(...last.values.slice(0, max));
-      }
-      if (results.length > 1) {
-        const sets = results.map((r) => this.pack(r.columns, r.values, max, 0));
-        return { ...sets[sets.length - 1], durationMs: Date.now() - started, statements: sets.length, sets };
-      }
+    const sets = await this.call<RawSet[]>({ op: 'query', sql, params, max }, cancel);
+    const results = sets.map((r) => this.pack(r, 0));
+    if (results.length === 0) {
+      return { columns: [], rows: [], rowCount: 0, truncated: false, durationMs: Date.now() - started };
     }
-    return {
-      columns,
-      rows: kept.map((row) => row.map((v) => formatCell(v instanceof Uint8Array ? Buffer.from(v) : v))),
-      rowCount: total,
-      truncated: total > max,
-      durationMs: Date.now() - started,
-    };
+    const last = { ...results[results.length - 1], durationMs: Date.now() - started };
+    return results.length > 1 ? { ...last, statements: results.length, sets: results } : last;
   }
 
-  private pack(columns: string[], values: unknown[][], max: number, durationMs: number): QueryResult {
+  private pack(raw: RawSet, durationMs: number): QueryResult {
     return {
-      columns,
-      rows: values.slice(0, max).map((row) => row.map((v) => formatCell(v instanceof Uint8Array ? Buffer.from(v) : v))),
-      rowCount: values.length,
-      truncated: values.length > max,
+      columns: raw.columns,
+      rows: raw.values.map((row) => row.map((v) => formatCell(v instanceof Uint8Array ? Buffer.from(v) : v))),
+      rowCount: raw.total,
+      truncated: raw.total > raw.values.length,
       durationMs,
     };
   }
@@ -1021,8 +1012,11 @@ export class SqliteDriver implements DbDriver {
   }
 
   async dispose(): Promise<void> {
-    this.db?.close();
-    this.db = undefined;
+    const worker = this.worker;
+    if (worker) {
+      this.drop(worker, new Error('Connexion fermée.'));
+      await worker.terminate();
+    }
   }
 }
 

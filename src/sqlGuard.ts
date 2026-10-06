@@ -16,6 +16,8 @@ export interface StatementInfo {
   kind: StatementKind;
   /** Raison pour laquelle l'instruction est dangereuse (UPDATE sans WHERE, DROP…). */
   danger?: string;
+  /** Modifie la structure (CREATE, ALTER, DROP, RENAME, COMMENT) : l'arbre et l'autocomplétion doivent être relus. */
+  ddl: boolean;
 }
 
 const isIdentChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$]/.test(c);
@@ -157,6 +159,7 @@ export function splitStatements(sql: string, dbType: DbType): string[] {
 
 const READ_FIRST = new Set(['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'VALUES', 'TABLE', 'USE', 'HELP']);
 const SESSION_FIRST = new Set(['SET', 'BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'END', 'SAVEPOINT', 'RELEASE', 'RESET']);
+const DDL_FIRST = new Set(['CREATE', 'ALTER', 'DROP', 'RENAME', 'COMMENT']);
 const DML = new Set(['INSERT', 'UPDATE', 'DELETE', 'MERGE']);
 
 /** Pragmas SQLite qui ne font que lire (sans « = » ni argument qui les transformerait en réglage). */
@@ -214,7 +217,7 @@ export function classify(st: Statement): StatementInfo {
       danger = 'ALTER … DROP : suppression définitive d\'une colonne ou d\'une contrainte.';
     }
   }
-  return { sql: st.sql, kind, danger };
+  return { sql: st.sql, kind, danger, ddl: DDL_FIRST.has(first) };
 }
 
 export function analyze(sql: string, dbType: DbType): StatementInfo[] {

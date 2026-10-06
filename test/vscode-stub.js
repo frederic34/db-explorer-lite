@@ -8,8 +8,13 @@ class EventEmitter {
   dispose() { this.listeners = []; }
 }
 
+class TreeItem { constructor(label, state) { this.label = label; this.collapsibleState = state; } }
+class ThemeIcon { constructor(id, color) { this.id = id; this.color = color; } }
+class ThemeColor { constructor(id) { this.id = id; } }
+
 module.exports = {
-  EventEmitter,
+  EventEmitter, TreeItem, ThemeIcon, ThemeColor,
+  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   ViewColumn: { Beside: 2, Active: 1 },
   Uri: { file: (p) => ({ fsPath: p }) },
   window: {

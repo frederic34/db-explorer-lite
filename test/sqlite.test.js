@@ -213,3 +213,52 @@ test('export : INSERT SQL rejoué dans SQLite, JSON typé, lecture par lots', as
   assert.deepEqual(seen, ['1', '2', '3']);
   await d.dispose();
 });
+
+const SLOW = 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200000000) SELECT count(*) FROM c';
+
+test('requête longue : l\'extension n\'est pas bloquée, l\'annulation l\'interrompt, le pilote reste utilisable', async () => {
+  const { CancelToken } = require('../.test-build/util.js');
+  await makeDb(SCHEMA);
+  const d = createDriver(cfg(), '', opts);
+  assert.equal((await d.query('SELECT count(*) FROM customers')).rows[0][0], '3');
+
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 10);
+  const token = new CancelToken();
+  const t0 = Date.now();
+  const slow = d.query(SLOW, [], token);
+  const rejected = assert.rejects(slow, /annulée/);
+  await new Promise((r) => setTimeout(r, 700));
+  assert.ok(ticks >= 30, `la boucle d'événements tourne pendant la requête (${ticks} battements)`);
+  await token.cancel();
+  await rejected;
+  clearInterval(timer);
+  assert.ok(Date.now() - t0 < 3000, 'annulation rapide');
+
+  // le moteur redémarre et recharge le fichier
+  assert.equal((await d.query('SELECT count(*) FROM customers')).rows[0][0], '3');
+  assert.deepEqual((await d.listTables()).map((t) => t.name), ['big', 'customers', 'lines', 'orders']);
+
+  // annulation déjà demandée : rien n'est lancé
+  const done = new CancelToken();
+  await done.cancel();
+  await assert.rejects(d.query(SLOW, [], done), /annulée/);
+  assert.equal((await d.query('SELECT 1')).rows[0][0], '1');
+  await d.dispose();
+});
+
+test('fermeture pendant une requête : l\'appel échoue proprement ; plusieurs pilotes indépendants', async () => {
+  await makeDb(SCHEMA);
+  const a = createDriver(cfg(), '', opts);
+  const b = createDriver(cfg(), '', opts);
+  const pending = a.query(SLOW);
+  const failed = assert.rejects(pending, /fermée/);
+  await new Promise((r) => setTimeout(r, 100));
+  await a.dispose();
+  await failed;
+  assert.equal((await b.query('SELECT count(*) FROM orders')).rows[0][0], '3', 'l\'autre pilote n\'est pas touché');
+  const [x, y, z] = await Promise.all([b.query('SELECT 1'), b.query('SELECT 2'), b.query('SELECT 3')]);
+  assert.deepEqual([x.rows[0][0], y.rows[0][0], z.rows[0][0]], ['1', '2', '3']);
+  await b.dispose();
+  await a.dispose();
+});

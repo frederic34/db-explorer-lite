@@ -70,12 +70,20 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> 
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<DbNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  /** Dernier nœud créé pour chaque connexion : permet de ne rafraîchir qu'elle (et ses enfants dépliés). */
+  private readonly roots = new Map<string, ConnectionNode>();
+
   constructor(private readonly manager: ConnectionManager) {
     manager.onDidChange(() => this.refresh());
   }
 
   refresh(): void {
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  /** Relit une seule connexion (après un CREATE / ALTER / DROP exécuté dans l'éditeur). */
+  refreshConnection(id: string): void {
+    this._onDidChangeTreeData.fire(this.roots.get(id));
   }
 
   getTreeItem(element: DbNode): vscode.TreeItem {
@@ -85,7 +93,12 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> 
   async getChildren(element?: DbNode): Promise<DbNode[]> {
     try {
       if (!element) {
-        return this.manager.list().map((c) => new ConnectionNode(c));
+        this.roots.clear();
+        return this.manager.list().map((c) => {
+          const node = new ConnectionNode(c);
+          this.roots.set(c.id, node);
+          return node;
+        });
       }
       if (element instanceof ConnectionNode) {
         const driver = await this.manager.getDriver(element.config.id);
