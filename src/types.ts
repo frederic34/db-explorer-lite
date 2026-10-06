@@ -39,13 +39,25 @@ export interface QueryResult {
   durationMs: number;
 }
 
+export interface WriteStatement {
+  sql: string;
+  params: unknown[];
+  /** Nombre de lignes que l'instruction doit affecter ; sinon toute la transaction est annulée. */
+  expect?: number;
+}
+
 export interface DbDriver {
   readonly type: DbType;
   /** Bases (MySQL) ou schémas (PostgreSQL). */
   listContainers(): Promise<string[]>;
   listTables(container: string): Promise<TableInfo[]>;
   listColumns(container: string, table: string): Promise<ColumnInfo[]>;
-  query(sql: string): Promise<QueryResult>;
+  query(sql: string, params?: unknown[]): Promise<QueryResult>;
+  /**
+   * Exécute les instructions dans une transaction (tout ou rien) et retourne,
+   * pour chacune, le nombre de lignes affectées.
+   */
+  executeBatch(statements: WriteStatement[]): Promise<number[]>;
   dispose(): Promise<void>;
 }
 

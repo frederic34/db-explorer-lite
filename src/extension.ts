@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
-import { ResultsPanel } from './resultsPanel';
+import { EditSpec, ReadOnlySpec, ResultsPanel } from './resultsPanel';
 import { ConnectionConfig } from './types';
 import {
   ColumnNode,
@@ -80,7 +80,15 @@ export function activate(context: vscode.ExtensionContext): void {
     return cfg.id;
   }
 
-  async function execute(connectionId: string, sql: string): Promise<void> {
+  /**
+   * Exécute une requête et affiche le résultat. Si `source` est fourni (aperçu d'une table),
+   * la grille permet de modifier et de supprimer des lignes via la clé primaire.
+   */
+  async function execute(
+    connectionId: string,
+    sql: string,
+    source?: { container: string; table: string; isView: boolean },
+  ): Promise<void> {
     const cfg = mgr.get(connectionId);
     if (!cfg) {
       return;
@@ -94,7 +102,24 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           const driver = await mgr.getDriver(connectionId);
           const result = await driver.query(sql);
-          results.showResult(cfg.name, sql, result);
+
+          let edit: EditSpec | ReadOnlySpec | undefined;
+          if (source?.isView) {
+            edit = { readOnlyReason: 'les vues ne sont pas modifiables' };
+          } else if (source) {
+            try {
+              edit = {
+                dbType: cfg.type,
+                container: source.container,
+                table: source.table,
+                tableColumns: await driver.listColumns(source.container, source.table),
+                getDriver: () => mgr.getDriver(connectionId),
+              };
+            } catch (err) {
+              edit = { readOnlyReason: `édition indisponible (${errorMessage(err)})` };
+            }
+          }
+          results.showResult(cfg.name, sql, result, edit);
         } catch (err) {
           results.showError(cfg.name, sql, errorMessage(err));
         }
@@ -197,7 +222,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const limit = Math.max(1, Math.floor(config().get<number>('previewLimit', 200)));
       const q = (n: string) => quoteIdent(node.connection.type, n);
       const sql = `SELECT * FROM ${q(node.container)}.${q(node.table.name)} LIMIT ${limit}`;
-      await execute(node.connection.id, sql);
+      await execute(node.connection.id, sql, {
+        container: node.container,
+        table: node.table.name,
+        isView: node.table.isView,
+      });
     }),
 
     vscode.commands.registerCommand('dbExplorer.copyName', async (node?: DbNode) => {

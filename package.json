@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "DB Explorer Lite",
   "description": "Se connecter à MySQL/MariaDB ou PostgreSQL, parcourir les tables, consulter les données et exécuter des requêtes SQL.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"

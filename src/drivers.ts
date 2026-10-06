@@ -7,7 +7,15 @@ import {
   DriverOptions,
   QueryResult,
   TableInfo,
+  WriteStatement,
 } from './types';
+
+function mismatch(actual: number, expected: number): Error {
+  return new Error(
+    `Opération annulée : ${actual} ligne(s) affectée(s) au lieu de ${expected} attendue(s). ` +
+      'Les données ont peut-être été modifiées entre-temps ; actualisez l\'aperçu.',
+  );
+}
 
 const MYSQL_SYSTEM_DBS = new Set(['information_schema', 'performance_schema', 'mysql', 'sys']);
 
@@ -74,6 +82,9 @@ export class MySqlDriver implements DbDriver {
       ssl: cfg.ssl ? {} : undefined,
       connectTimeout: 10000,
       connectionLimit: 3,
+      // affectedRows = lignes trouvées (et non seulement modifiées) : un UPDATE qui réécrit
+      // la même valeur doit compter comme une ligne affectée.
+      flags: ['+FOUND_ROWS'],
       dateStrings: true,
       supportBigNumbers: true,
       bigNumberStrings: true,
@@ -130,9 +141,35 @@ export class MySqlDriver implements DbDriver {
     }));
   }
 
-  async query(sql: string): Promise<QueryResult> {
+  async executeBatch(statements: WriteStatement[]): Promise<number[]> {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const affected: number[] = [];
+      for (const st of statements) {
+        const [res] = (await conn.query({ sql: st.sql, values: st.params } as mysql.QueryOptions)) as unknown as [
+          { affectedRows?: number },
+          unknown,
+        ];
+        const n = res?.affectedRows ?? 0;
+        if (st.expect !== undefined && n !== st.expect) {
+          throw mismatch(n, st.expect);
+        }
+        affected.push(n);
+      }
+      await conn.commit();
+      return affected;
+    } catch (err) {
+      await conn.rollback().catch(() => undefined);
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     const t0 = Date.now();
-    const { rows, fields } = await this.run(sql);
+    const { rows, fields } = await this.run(sql, params);
     const durationMs = Date.now() - t0;
 
     if (Array.isArray(rows) && fields) {
@@ -163,8 +200,8 @@ export class MySqlDriver implements DbDriver {
 // PostgreSQL
 // ---------------------------------------------------------------------------
 
-/** date, time, timestamp, timestamptz, timetz : on garde le texte renvoyé par le serveur. */
-const PG_RAW_TEXT_OIDS = new Set([1082, 1083, 1114, 1184, 1266]);
+/** date, time, timestamp, timestamptz, interval, timetz : on garde le texte renvoyé par le serveur. */
+const PG_RAW_TEXT_OIDS = new Set([1082, 1083, 1114, 1184, 1186, 1266]);
 
 export class PostgresDriver implements DbDriver {
   readonly type = 'postgres' as const;
@@ -239,10 +276,33 @@ export class PostgresDriver implements DbDriver {
     }));
   }
 
-  async query(sql: string): Promise<QueryResult> {
+  async executeBatch(statements: WriteStatement[]): Promise<number[]> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const affected: number[] = [];
+      for (const st of statements) {
+        const res = await client.query(st.sql, st.params);
+        const n = res.rowCount ?? 0;
+        if (st.expect !== undefined && n !== st.expect) {
+          throw mismatch(n, st.expect);
+        }
+        affected.push(n);
+      }
+      await client.query('COMMIT');
+      return affected;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     const t0 = Date.now();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw: any = await this.pool.query({ text: sql, rowMode: 'array' });
+    const raw: any = await this.pool.query({ text: sql, values: params, rowMode: 'array' });
     const durationMs = Date.now() - t0;
     // Plusieurs instructions dans le texte : pg renvoie un tableau, on affiche la dernière.
     const res = Array.isArray(raw) ? raw[raw.length - 1] : raw;
