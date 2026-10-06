@@ -36,6 +36,12 @@ export function isEditableType(dbType: DbType, columnType: string): boolean {
   return dbType === 'mysql' ? !MYSQL_NOT_EDITABLE.test(t) : PG_EDITABLE.has(t);
 }
 
+/** Colonne binaire / géométrique : sans sens en recherche texte. */
+export function isBinaryLike(dbType: DbType, columnType: string): boolean {
+  const t = columnType.trim();
+  return dbType === 'mysql' ? MYSQL_NOT_EDITABLE.test(t) : t === 'bytea';
+}
+
 export interface EditPlan {
   /** Indices (dans les colonnes du résultat) de la clé primaire. */
   pk: number[];

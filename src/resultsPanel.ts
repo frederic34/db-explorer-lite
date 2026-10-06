@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
+import { buildCountQuery, buildPageQuery } from './browse';
 import {
   buildDeletes,
   buildInsert,
@@ -22,9 +23,49 @@ export interface EditSpec {
   getDriver: () => Promise<DbDriver>;
 }
 
-/** Résultat lisible mais pas modifiable (vue, requête libre…) : on peut en donner la raison. */
-export interface ReadOnlySpec {
-  readOnlyReason: string;
+/** Aperçu paginé d'une table ou d'une vue. */
+export interface TableSource extends EditSpec {
+  connectionName: string;
+  isView: boolean;
+  /** Lignes par page au départ. */
+  pageSize: number;
+}
+
+type SortState = { col: number; dir: 'asc' | 'desc' } | null;
+
+/** État de navigation d'un aperçu : page, taille, tri et filtre sont gérés côté serveur. */
+interface BrowseState {
+  src: TableSource;
+  offset: number;
+  pageSize: number;
+  sort: SortState;
+  filter: string;
+  hasNext: boolean;
+  /** Total des lignes pour le filtre courant : undefined = calcul en cours, null = indisponible. */
+  total?: number | null;
+  /** Numéro de la dernière requête de page lancée / du dernier comptage lancé (pour ignorer les anciens). */
+  loadSeq: number;
+  countSeq: number;
+}
+
+interface BrowseInfo {
+  offset: number;
+  pageSize: number;
+  hasNext: boolean;
+  total?: number | null;
+  sort: SortState;
+  filter: string;
+  isView: boolean;
+}
+
+const MAX_PAGE_SIZE = 1000;
+
+interface Page {
+  columns: string[];
+  rows: Row[];
+  hasNext: boolean;
+  durationMs: number;
+  sql: string;
 }
 
 interface EditInfo {
@@ -47,6 +88,7 @@ interface Payload {
   error?: string;
   edit?: EditInfo;
   readOnlyReason?: string;
+  browse?: BrowseInfo;
 }
 
 interface State {
@@ -55,6 +97,7 @@ interface State {
   rows: (Row | null)[];
   spec?: EditSpec;
   plan?: EditPlan;
+  browse?: BrowseState;
 }
 
 const CSS = `
@@ -73,6 +116,10 @@ const CSS = `
                color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent);
                padding: 3px 6px; }
   .spacer { flex: 1; }
+  .pager { display: flex; align-items: center; gap: 4px; }
+  .pager select { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+                  border: 1px solid var(--vscode-dropdown-border, transparent); padding: 2px 4px; }
+  .pager .pos { margin: 0 6px; }
   button { font: inherit; border: none; border-radius: 2px; cursor: pointer; padding: 4px 10px;
            background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   button:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground); }
@@ -143,7 +190,8 @@ const SCRIPT = String.raw`
 
   var details = el('details', 'sql');
   details.appendChild(el('summary', '', 'Requête'));
-  details.appendChild(el('pre', '', data.sql));
+  var sqlPre = el('pre', '', data.sql);
+  details.appendChild(sqlPre);
   root.appendChild(details);
 
   if (data.kind === 'error') {
@@ -153,6 +201,7 @@ const SCRIPT = String.raw`
   if (data.columns.length === 0) { return; }
 
   var edit = data.edit || null;
+  var server = !!data.browse;
   var rows = data.rows.map(function (c, i) { return { i: i, c: c }; });
   var sortCol = -1;
   var asc = true;
@@ -171,7 +220,8 @@ const SCRIPT = String.raw`
   var bar = el('div', 'bar');
   var filter = el('input');
   filter.type = 'search';
-  filter.placeholder = 'Filtrer les lignes…';
+  filter.placeholder = server ? 'Filtrer (toute la table)…' : 'Filtrer les lignes…';
+  if (server) { filter.value = data.browse.filter; }
   var info = el('span', 'muted');
   var spacer = el('span', 'spacer');
   var delBtn = null;
@@ -189,6 +239,67 @@ const SCRIPT = String.raw`
   if (delBtn) { bar.appendChild(delBtn); }
   bar.appendChild(exportBtn);
   root.appendChild(bar);
+
+  // --- Pagination côté serveur : la grille n'est qu'une fenêtre sur la table.
+  var pagerBar = null, firstBtn, prevBtn, nextBtn, refreshBtn, sizeSel, pos;
+  function ask(m) {
+    m.type = 'browse';
+    m.token = data.token;
+    vscode.postMessage(m);
+    pos.textContent = 'Chargement…';
+  }
+  if (server) {
+    pagerBar = el('div', 'bar');
+    var pg = el('div', 'pager');
+    firstBtn = el('button', '', '⏮');
+    firstBtn.title = 'Première page';
+    prevBtn = el('button', '', '◀');
+    prevBtn.title = 'Page précédente';
+    nextBtn = el('button', '', '▶');
+    nextBtn.title = 'Page suivante';
+    refreshBtn = el('button', '', '⟳');
+    refreshBtn.title = 'Actualiser';
+    pos = el('span', 'muted pos');
+    sizeSel = el('select');
+    sizeSel.title = 'Lignes par page';
+    sizeSel.setAttribute('aria-label', 'Lignes par page');
+    [firstBtn, prevBtn, nextBtn, refreshBtn].forEach(function (b) { b.setAttribute('aria-label', b.title); });
+    firstBtn.addEventListener('click', function () { ask({ page: 'first' }); });
+    prevBtn.addEventListener('click', function () { ask({ page: 'prev' }); });
+    nextBtn.addEventListener('click', function () { ask({ page: 'next' }); });
+    refreshBtn.addEventListener('click', function () { ask({ refresh: true }); });
+    sizeSel.addEventListener('change', function () { ask({ pageSize: Number(sizeSel.value) }); });
+    pg.appendChild(firstBtn); pg.appendChild(prevBtn); pg.appendChild(pos);
+    pg.appendChild(nextBtn); pg.appendChild(refreshBtn);
+    pagerBar.appendChild(pg);
+    var sz = el('span', 'muted', 'Lignes par page');
+    pagerBar.appendChild(sz);
+    pagerBar.appendChild(sizeSel);
+    root.appendChild(pagerBar);
+  }
+  function updatePager() {
+    if (!server) { return; }
+    var b = data.browse;
+    firstBtn.disabled = prevBtn.disabled = busy || b.offset === 0;
+    nextBtn.disabled = busy || !b.hasNext;
+    refreshBtn.disabled = busy;
+    sizeSel.disabled = busy;
+    var sizes = [25, 50, 100, 200, 500, 1000];
+    if (sizes.indexOf(b.pageSize) === -1) { sizes.push(b.pageSize); sizes.sort(function (x, y) { return x - y; }); }
+    sizeSel.replaceChildren();
+    sizes.forEach(function (n) {
+      var o = el('option', '', String(n));
+      o.value = String(n);
+      if (n === b.pageSize) { o.selected = true; }
+      sizeSel.appendChild(o);
+    });
+    var totalTxt;
+    if (typeof b.total === 'number') { totalTxt = ' sur ' + b.total; }
+    else if (b.total === undefined) { totalTxt = ' sur …'; }
+    else { totalTxt = b.hasNext ? ' (et plus)' : ''; }
+    if (rows.length === 0) { pos.textContent = b.offset > 0 ? 'Page vide' : 'Aucune ligne'; }
+    else { pos.textContent = 'Lignes ' + (b.offset + 1) + '–' + (b.offset + rows.length) + totalTxt; }
+  }
 
   var opmsg = el('div');
   opmsg.id = 'opmsg';
@@ -226,6 +337,13 @@ const SCRIPT = String.raw`
     var th = el('th', 'sortable', name);
     th.title = 'Trier par cette colonne';
     th.addEventListener('click', function () {
+      if (server) {
+        // asc -> desc -> sans tri (ordre de la clé primaire), exécuté par le serveur.
+        var cur = data.browse.sort;
+        var next = !cur || cur.col !== i ? { col: i, dir: 'asc' } : (cur.dir === 'asc' ? { col: i, dir: 'desc' } : null);
+        ask({ sort: next });
+        return;
+      }
       if (sortCol === i) { asc = !asc; } else { sortCol = i; asc = true; }
       rows.sort(function (a, b) { return compare(a.c[i], b.c[i]) * (asc ? 1 : -1); });
       updateHeaders();
@@ -249,7 +367,7 @@ const SCRIPT = String.raw`
   }
 
   function visibleRows() {
-    if (!term) { return rows; }
+    if (server || !term) { return rows; }
     return rows.filter(function (r) {
       return r.c.some(function (c) { return c !== null && c.toLowerCase().indexOf(term) !== -1; });
     });
@@ -258,7 +376,8 @@ const SCRIPT = String.raw`
 
   function updateBar() {
     var vis = visibleRows();
-    info.textContent = term ? vis.length + ' / ' + rows.length + ' lignes affichées' : '';
+    updatePager();
+    info.textContent = server ? '' : term ? vis.length + ' / ' + rows.length + ' lignes affichées' : '';
     if (edit) {
       addBtn.disabled = busy;
       var n = selectedCount();
@@ -551,12 +670,19 @@ const SCRIPT = String.raw`
     var list = visibleRows();
     var frag = document.createDocumentFragment();
     if (inserting) { frag.appendChild(renderInsertRow()); }
-    for (var i = 0; i < list.length; i++) { frag.appendChild(renderRow(list[i], i + 1)); }
+    var base = server ? data.browse.offset : 0;
+    for (var i = 0; i < list.length; i++) { frag.appendChild(renderRow(list[i], base + i + 1)); }
     tbody.replaceChildren(frag);
     updateBar();
   }
 
+  var filterTimer = null;
   filter.addEventListener('input', function () {
+    if (server) {
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(function () { ask({ filter: filter.value }); }, 350);
+      return;
+    }
     term = filter.value.toLowerCase();
     if (edit) {
       // On ne supprime que ce qui est visible : les lignes masquees par le filtre sont deselectionnees.
@@ -583,9 +709,36 @@ const SCRIPT = String.raw`
     });
   }
 
+  function syncSort() {
+    var s = server ? data.browse.sort : null;
+    sortCol = s ? s.col : -1;
+    asc = s ? s.dir === 'asc' : true;
+  }
+
   window.addEventListener('message', function (event) {
     var m = event.data;
-    if (!m || m.type !== 'opResult' || m.token !== data.token) { return; }
+    if (!m) { return; }
+    if (m.type === 'total') {
+      if (server && m.filter === data.browse.filter) { data.browse.total = m.total; updatePager(); }
+      return;
+    }
+    // Une page chargée porte le NOUVEAU jeton (il remplace l'ancien) : elle n'est donc pas comparée.
+    if (m.type !== 'page' && m.token !== data.token) { return; }
+    if (m.type === 'pageError') { showOp('ko', m.message); updatePager(); return; }
+    if (m.type === 'page') {
+      data.token = m.token;
+      data.browse = m.browse;
+      data.summary = m.summary;
+      sqlPre.textContent = m.sql;
+      rows = m.rows.map(function (c, i) { return { i: i, c: c }; });
+      selected = {}; editing = null; inserting = null; busy = false;
+      deletedCount = 0; insertedCount = 0;
+      if (document.activeElement !== filter) { filter.value = m.browse.filter; }
+      syncSort(); clearOp(); updateHeaders(); renderBody();
+      wrap.scrollTop = 0;
+      return;
+    }
+    if (m.type !== 'opResult') { return; }
     busy = false;
     if (!m.ok) {
       if (m.cancelled) { clearOp(); } else { showOp('ko', m.message); }
@@ -613,8 +766,10 @@ const SCRIPT = String.raw`
     renderBody();
   });
 
+  syncSort();
   updateHeaders();
   renderBody();
+  vscode.postMessage({ type: 'ready', token: data.token });
 })();
 `;
 
@@ -627,12 +782,8 @@ export class ResultsPanel {
   private last?: State;
   private token = '';
 
-  showResult(
-    connection: string,
-    sql: string,
-    result: QueryResult,
-    edit?: EditSpec | ReadOnlySpec,
-  ): void {
+  /** Résultat d'une requête libre : lecture seule, tri et filtre appliqués à la page affichée. */
+  showResult(connection: string, sql: string, result: QueryResult): void {
     let summary: string;
     if (result.columns.length > 0) {
       summary = plural(result.rowCount, 'ligne', 'lignes');
@@ -645,18 +796,56 @@ export class ResultsPanel {
     }
     summary += ` · ${result.durationMs} ms`;
 
-    const state: State = { columns: result.columns, rows: result.rows.map((r) => [...r]) };
+    this.last = { columns: result.columns, rows: result.rows.map((r) => [...r]) };
+    this.render({
+      kind: 'result',
+      token: '',
+      connection,
+      sql,
+      columns: result.columns,
+      rows: result.rows,
+      summary,
+    });
+  }
+
+  /**
+   * Aperçu paginé d'une table ou d'une vue. La page, le tri et le filtre sont exécutés par le
+   * serveur (la page affichée n'est qu'une fenêtre sur la table) ; si la table a une clé primaire,
+   * les lignes peuvent être ajoutées, modifiées et supprimées.
+   */
+  async openTable(src: TableSource): Promise<void> {
+    const b: BrowseState = {
+      src,
+      offset: 0,
+      pageSize: this.clampPageSize(src.pageSize),
+      sort: null,
+      filter: '',
+      hasNext: false,
+      total: undefined,
+      loadSeq: 0,
+      countSeq: 0,
+    };
+    let page: Page;
+    try {
+      page = await this.fetchPage(b);
+    } catch (err) {
+      this.showError(src.connectionName, `Aperçu de ${src.container}.${src.table}`, errorMessage(err));
+      return;
+    }
+    b.hasNext = page.hasNext;
+
+    const state: State = { columns: page.columns, rows: page.rows.map((r) => [...r]), browse: b };
     let editInfo: EditInfo | undefined;
     let readOnlyReason: string | undefined;
-    if (edit && 'readOnlyReason' in edit) {
-      readOnlyReason = edit.readOnlyReason;
-    } else if (edit && result.columns.length > 0) {
-      const planned = planEditing(edit.dbType, result.columns, edit.tableColumns);
+    if (src.isView) {
+      readOnlyReason = 'les vues ne sont pas modifiables';
+    } else {
+      const planned = planEditing(src.dbType, page.columns, src.tableColumns);
       if ('plan' in planned) {
-        state.spec = edit;
+        state.spec = src;
         state.plan = planned.plan;
         editInfo = {
-          table: edit.table,
+          table: src.table,
           pk: planned.plan.pk,
           editable: planned.plan.editable,
           insertable: planned.plan.insertable,
@@ -671,13 +860,202 @@ export class ResultsPanel {
     this.render({
       kind: 'result',
       token: '',
-      connection,
-      sql,
-      columns: result.columns,
-      rows: result.rows,
-      summary,
+      connection: src.connectionName,
+      sql: page.sql,
+      columns: page.columns,
+      rows: page.rows,
+      summary: this.pageSummary(page),
       edit: editInfo,
       readOnlyReason,
+      browse: this.browseInfo(b),
+    });
+    this.startCount(b);
+  }
+
+  /** Taille de page bornée : jamais plus que le maximum de lignes conservées par résultat. */
+  private clampPageSize(n: number): number {
+    const maxRows = vscode.workspace.getConfiguration('dbExplorer').get<number>('maxRows', 5000);
+    const limit = Math.max(1, Math.min(MAX_PAGE_SIZE, maxRows - 1));
+    const wanted = Number.isFinite(n) ? Math.floor(n) : 200;
+    return Math.min(limit, Math.max(1, wanted));
+  }
+
+  private async fetchPage(b: BrowseState): Promise<Page> {
+    const { src } = b;
+    const query = buildPageQuery({
+      dbType: src.dbType,
+      container: src.container,
+      table: src.table,
+      columns: src.tableColumns,
+      pageSize: b.pageSize,
+      offset: b.offset,
+      sort: b.sort ? { column: src.tableColumns[b.sort.col].name, dir: b.sort.dir } : undefined,
+      filter: b.filter,
+    });
+    const driver = await src.getDriver();
+    const res = await driver.query(query.sql, query.params);
+    return {
+      columns: res.columns,
+      rows: res.rows.slice(0, b.pageSize),
+      hasNext: res.rows.length > b.pageSize,
+      durationMs: res.durationMs,
+      sql: b.filter ? `${query.sql}\n-- filtre : « ${b.filter} »` : query.sql,
+    };
+  }
+
+  private pageSummary(page: Page): string {
+    return `${plural(page.rows.length, 'ligne', 'lignes')} · ${page.durationMs} ms`;
+  }
+
+  private browseInfo(b: BrowseState): BrowseInfo {
+    return {
+      offset: b.offset,
+      pageSize: b.pageSize,
+      hasNext: b.hasNext,
+      total: b.total,
+      sort: b.sort,
+      filter: b.filter,
+      isView: b.src.isView,
+    };
+  }
+
+  /**
+   * Compte les lignes (pour le filtre courant) en arrière-plan : sur une grosse table un COUNT(*)
+   * peut être long, il ne doit jamais retarder l'affichage d'une page. Le résultat est ignoré si un
+   * comptage plus récent a démarré entre-temps.
+   */
+  private startCount(b: BrowseState): void {
+    const seq = ++b.countSeq;
+    const filter = b.filter;
+    b.total = undefined;
+    void (async () => {
+      let total: number | null = null;
+      try {
+        const { src } = b;
+        const query = buildCountQuery({
+          dbType: src.dbType,
+          container: src.container,
+          table: src.table,
+          columns: src.tableColumns,
+          pageSize: 1,
+          offset: 0,
+          filter,
+        });
+        const res = await (await src.getDriver()).query(query.sql, query.params);
+        const n = Number(res.rows[0]?.[0]);
+        total = Number.isFinite(n) ? n : null;
+      } catch {
+        total = null;
+      }
+      if (b.countSeq !== seq || this.last?.browse !== b) {
+        return;
+      }
+      b.total = total;
+      this.postTotal(b);
+    })();
+  }
+
+  private postTotal(b: BrowseState): void {
+    void this.panel?.webview.postMessage({ type: 'total', total: b.total ?? null, filter: b.filter });
+  }
+
+  /** Après une insertion (+1) ou une suppression (−n) : le total connu reste juste sans recompter. */
+  private adjustTotal(token: string, delta: number): void {
+    const b = this.last?.browse;
+    if (b && token === this.token && typeof b.total === 'number') {
+      b.total = Math.max(0, b.total + delta);
+      this.postTotal(b);
+    }
+  }
+
+  private async browse(msg: Message): Promise<void> {
+    const b = this.last?.browse;
+    if (!b || !this.last) {
+      return;
+    }
+    const failPage = (message: string) =>
+      void this.panel?.webview.postMessage({ type: 'pageError', token: this.token, message });
+    const next = { offset: b.offset, pageSize: b.pageSize, sort: b.sort, filter: b.filter };
+    let recount = msg.refresh === true;
+
+    if (msg.pageSize !== undefined) {
+      if (typeof msg.pageSize !== 'number' || !Number.isInteger(msg.pageSize) || msg.pageSize < 1) {
+        return failPage('Taille de page invalide.');
+      }
+      const size = this.clampPageSize(msg.pageSize);
+      if (size !== b.pageSize) {
+        next.pageSize = size;
+        next.offset = 0;
+      }
+    }
+    if ('sort' in msg) {
+      const s = msg.sort as { col?: unknown; dir?: unknown } | null | undefined;
+      if (s === null) {
+        next.sort = null;
+      } else if (
+        s &&
+        typeof s.col === 'number' &&
+        Number.isInteger(s.col) &&
+        s.col >= 0 &&
+        s.col < b.src.tableColumns.length &&
+        (s.dir === 'asc' || s.dir === 'desc')
+      ) {
+        next.sort = { col: s.col, dir: s.dir };
+      } else {
+        return failPage('Tri invalide.');
+      }
+      next.offset = 0;
+    }
+    if (msg.filter !== undefined) {
+      if (typeof msg.filter !== 'string') {
+        return failPage('Filtre invalide.');
+      }
+      const filter = msg.filter.trim().slice(0, 200);
+      if (filter !== b.filter) {
+        next.filter = filter;
+        next.offset = 0;
+        recount = true;
+      }
+    }
+    if (msg.page === 'next') {
+      if (!b.hasNext) {
+        return failPage("Il n'y a pas de page suivante.");
+      }
+      next.offset += next.pageSize;
+    } else if (msg.page === 'prev') {
+      next.offset = Math.max(0, next.offset - next.pageSize);
+    } else if (msg.page === 'first') {
+      next.offset = 0;
+    }
+
+    const seq = ++b.loadSeq;
+    let page: Page;
+    try {
+      page = await this.fetchPage({ ...b, ...next });
+    } catch (err) {
+      if (seq === b.loadSeq) {
+        failPage(errorMessage(err));
+      }
+      return;
+    }
+    if (seq !== b.loadSeq || this.last?.browse !== b) {
+      return; // une requête plus récente a pris le relais
+    }
+
+    Object.assign(b, next, { hasNext: page.hasNext });
+    this.last.rows = page.rows.map((r) => [...r]);
+    // Nouveau jeton : tout message ou toute réponse liés à l'ancienne page deviennent périmés.
+    this.token = randomBytes(8).toString('hex');
+    if (recount) {
+      this.startCount(b);
+    }
+    void this.panel?.webview.postMessage({
+      type: 'page',
+      token: this.token,
+      rows: page.rows,
+      summary: this.pageSummary(page),
+      sql: page.sql,
+      browse: this.browseInfo(b),
     });
   }
 
@@ -715,8 +1093,9 @@ export class ResultsPanel {
     this.panel.webview.html = buildHtml(payload, randomBytes(16).toString('hex'));
   }
 
-  private reply(message: Record<string, unknown>): void {
-    void this.panel?.webview.postMessage({ type: 'opResult', token: this.token, ...message });
+  /** Réponse à une opération : portée par le jeton de la page qui l'a demandée (ignorée si elle a changé). */
+  private reply(token: string, message: Record<string, unknown>): void {
+    void this.panel?.webview.postMessage({ type: 'opResult', token, ...message });
   }
 
   private async onMessage(msg: Message): Promise<void> {
@@ -724,24 +1103,35 @@ export class ResultsPanel {
     if (!msg || msg.token !== this.token) {
       return;
     }
+    const token = this.token;
     switch (msg.type) {
+      case 'ready': {
+        const b = this.last?.browse;
+        if (b && b.total !== undefined) {
+          this.postTotal(b);
+        }
+        break;
+      }
+      case 'browse':
+        await this.browse(msg);
+        break;
       case 'exportCsv':
         await this.exportCsv();
         break;
       case 'updateRow':
-        await this.updateRow(msg.rowIndex, msg.changes);
+        await this.updateRow(token, msg.rowIndex, msg.changes);
         break;
       case 'deleteRows':
-        await this.deleteRows(msg.rowIndexes);
+        await this.deleteRows(token, msg.rowIndexes);
         break;
       case 'insertRow':
-        await this.insertRow(msg.values);
+        await this.insertRow(token, msg.values);
         break;
     }
   }
 
-  private async insertRow(values: unknown): Promise<void> {
-    const fail = (message: string) => this.reply({ op: 'insert', ok: false, message });
+  private async insertRow(token: string, values: unknown): Promise<void> {
+    const fail = (message: string) => this.reply(token, { op: 'insert', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan) {
       return fail("Insertion impossible : ce résultat n'est pas modifiable.");
@@ -750,6 +1140,7 @@ export class ResultsPanel {
       return fail('Valeurs invalides.');
     }
     const { spec, plan } = st;
+    const rows = st.rows;
 
     const idx: number[] = [];
     const vals: (string | null)[] = [];
@@ -803,26 +1194,29 @@ export class ResultsPanel {
         }
       }
       if (!row) {
-        return this.reply({
+        this.adjustTotal(token, 1);
+        return this.reply(token, {
           op: 'insert',
           ok: true,
           message: "Ligne insérée. Actualisez l'aperçu pour la voir.",
         });
       }
-      st.rows.push(row);
-      this.reply({ op: 'insert', ok: true, rowIndex: st.rows.length - 1, row });
+      rows.push(row);
+      this.adjustTotal(token, 1);
+      this.reply(token, { op: 'insert', ok: true, rowIndex: rows.length - 1, row });
     } catch (err) {
       fail(errorMessage(err));
     }
   }
 
-  private async updateRow(rowIndex: unknown, changes: unknown): Promise<void> {
-    const fail = (message: string) => this.reply({ op: 'update', ok: false, message });
+  private async updateRow(token: string, rowIndex: unknown, changes: unknown): Promise<void> {
+    const fail = (message: string) => this.reply(token, { op: 'update', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan) {
       return fail("Modification impossible : ce résultat n'est pas modifiable.");
     }
-    const row = typeof rowIndex === 'number' ? st.rows[rowIndex] : undefined;
+    const rows = st.rows;
+    const row = typeof rowIndex === 'number' ? rows[rowIndex] : undefined;
     if (!row || typeof changes !== 'object' || changes === null) {
       return fail('Ligne introuvable.');
     }
@@ -847,7 +1241,7 @@ export class ResultsPanel {
       }
     }
     if (setIdx.length === 0) {
-      return this.reply({ op: 'update', ok: true, rowIndex, values: row });
+      return this.reply(token, { op: 'update', ok: true, rowIndex, values: row });
     }
 
     try {
@@ -875,15 +1269,15 @@ export class ResultsPanel {
       } catch {
         // La modification est faite ; à défaut de relecture on garde les valeurs saisies.
       }
-      st.rows[rowIndex as number] = values;
-      this.reply({ op: 'update', ok: true, rowIndex, values });
+      rows[rowIndex as number] = values;
+      this.reply(token, { op: 'update', ok: true, rowIndex, values });
     } catch (err) {
       fail(errorMessage(err));
     }
   }
 
-  private async deleteRows(rowIndexes: unknown): Promise<void> {
-    const fail = (message: string) => this.reply({ op: 'delete', ok: false, message });
+  private async deleteRows(token: string, rowIndexes: unknown): Promise<void> {
+    const fail = (message: string) => this.reply(token, { op: 'delete', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan) {
       return fail("Suppression impossible : ce résultat n'est pas modifiable.");
@@ -892,12 +1286,16 @@ export class ResultsPanel {
       return fail('Sélection invalide.');
     }
     const { spec, plan } = st;
+    const rows = st.rows;
     const indexes = [...new Set(rowIndexes)].filter(
-      (i): i is number => typeof i === 'number' && Number.isInteger(i) && !!st.rows[i],
+      (i): i is number => typeof i === 'number' && Number.isInteger(i) && !!rows[i],
     );
     if (indexes.length === 0) {
-      return this.reply({ op: 'delete', ok: true, rowIndexes: [] });
+      return this.reply(token, { op: 'delete', ok: true, rowIndexes: [] });
     }
+
+    // Clés primaires relevées AVANT la confirmation : ce sont celles que l'utilisateur a vues.
+    const pkRows = indexes.map((i) => plan.pk.map((j) => (rows[i] as Row)[j]));
 
     const remove = 'Supprimer';
     const choice = await vscode.window.showWarningMessage(
@@ -906,12 +1304,11 @@ export class ResultsPanel {
       remove,
     );
     if (choice !== remove) {
-      return this.reply({ op: 'delete', ok: false, cancelled: true });
+      return this.reply(token, { op: 'delete', ok: false, cancelled: true });
     }
 
     try {
       const driver = await spec.getDriver();
-      const pkRows = indexes.map((i) => plan.pk.map((j) => (st.rows[i] as Row)[j]));
       await driver.executeBatch(
         buildDeletes(
           spec.dbType,
@@ -921,8 +1318,9 @@ export class ResultsPanel {
           pkRows,
         ),
       );
-      indexes.forEach((i) => (st.rows[i] = null));
-      this.reply({ op: 'delete', ok: true, rowIndexes: indexes });
+      indexes.forEach((i) => (rows[i] = null));
+      this.adjustTotal(token, -indexes.length);
+      this.reply(token, { op: 'delete', ok: true, rowIndexes: indexes });
     } catch (err) {
       fail(errorMessage(err));
     }
@@ -964,6 +1362,11 @@ interface Message {
   changes?: unknown;
   rowIndexes?: unknown;
   values?: unknown;
+  page?: unknown;
+  pageSize?: unknown;
+  sort?: unknown;
+  filter?: unknown;
+  refresh?: unknown;
 }
 
 function buildHtml(payload: Payload, nonce: string): string {

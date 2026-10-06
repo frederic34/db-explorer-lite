@@ -7,12 +7,12 @@ Bases prises en charge : **MySQL / MariaDB** et **PostgreSQL**.
 ## Fonctionnalités
 
 - **Vue « DB Explorer »** dans la barre d'activité : connexions → bases (MySQL) ou schémas (PostgreSQL) → tables et vues → colonnes (type, clé primaire, NOT NULL).
-- **Aperçu des données** : icône « œil » au survol d'une table (ou clic droit → *Afficher les données*).
+- **Aperçu des données** : icône « œil » au survol d'une table (ou clic droit → *Afficher les données*). Les données sont **paginées** ; le **tri** et le **filtre** portent sur toute la table, pas seulement sur la page affichée (voir [Parcourir une table](#parcourir-une-table)).
 - **Éditeur SQL** : clic droit → *Nouvelle requête SQL*, ou commande `DB Explorer: Nouvelle requête SQL`.
 - **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ dans la barre de l'éditeur. La **sélection** est exécutée si elle existe, sinon **tout le fichier**.
-- **Résultats** dans un panneau latéral : tri par colonne, filtre texte, `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées.
+- **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées.
 - **Ajouter, modifier et supprimer des lignes** depuis l'aperçu d'une table : voir la section [Ajouter, modifier et supprimer des données](#ajouter-modifier-et-supprimer-des-données).
-- **Export CSV** du résultat affiché.
+- **Export CSV** du résultat affiché (pour un aperçu de table : la page courante).
 - Mots de passe stockés dans le **SecretStorage** de VS Code (jamais en clair dans les réglages).
 - Barre d'état : connexion utilisée par l'éditeur SQL actif (cliquer pour en changer).
 
@@ -40,10 +40,19 @@ Ou dans VS Code : `Extensions` → `…` → *Installer à partir d'un VSIX…*
 
 | Réglage | Défaut | Description |
 |---|---|---|
-| `dbExplorer.previewLimit` | `200` | Lignes affichées pour l'aperçu d'une table |
+| `dbExplorer.previewLimit` | `200` | Lignes par page au départ dans l'aperçu d'une table (modifiable dans l'aperçu, 1 à 1000) |
 | `dbExplorer.maxRows` | `5000` | Lignes maximum conservées pour un résultat de requête |
 | `dbExplorer.showSystemSchemas` | `false` | Afficher `information_schema`, `mysql`, `pg_catalog`… |
 | `dbExplorer.csvSeparator` | `,` | Séparateur CSV (`,`, `;` ou `tab`) — `;` convient mieux à Excel en français |
+
+## Parcourir une table
+
+L'aperçu d'une table lit **une page à la fois** (200 lignes par défaut) : ouvrir une table de plusieurs millions de lignes ne charge que la première page.
+
+- **Pagination** : ⏮ ◀ ▶ pour naviguer, ⟳ pour actualiser, sélecteur de **lignes par page** (25 à 1000). La position s'affiche « Lignes 101–200 sur 250 » ; le total est compté en arrière-plan et apparaît dès qu'il est connu (sur une très grosse table, il n'empêche jamais d'afficher la page). Il reste exact après vos propres insertions et suppressions ; ⟳ le recompte.
+- **Tri** : clic sur l'en-tête d'une colonne — croissant, décroissant, puis retour à l'ordre de la clé primaire. Le tri est exécuté par le serveur sur toute la table ; la clé primaire sert de départage, donc aucune ligne n'est répétée ou oubliée d'une page à l'autre.
+- **Filtre** : le texte saisi est recherché (« contient », sans tenir compte de la casse) dans **toutes les colonnes textuelles de la table**, pas seulement dans la page affichée. `%` et `_` sont cherchés tels quels. Sur une grosse table, ce filtre parcourt toutes les lignes : il peut prendre du temps s'il n'y a pas d'index utilisable.
+- Changer de page, de tri ou de filtre efface la sélection de lignes et ferme toute saisie en cours.
 
 ## Ajouter, modifier et supprimer des données
 
@@ -51,7 +60,7 @@ Dans l'**aperçu d'une table** (icône « œil »), la grille est éditable :
 
 - **Ajouter** : le bouton **Ajouter une ligne** ouvre une ligne de saisie en tête de grille. Pour chaque colonne, trois états : une **valeur** (dès que vous tapez), **NULL**, ou **défaut** (la colonne est omise et le serveur applique sa valeur par défaut ou son auto-incrément). Les colonnes `NOT NULL` sans valeur par défaut sont obligatoires ; ✓ ou `Entrée` insère, ✗ ou `Échap` annule. La ligne insérée est relue et affichée avec ses valeurs réelles (identifiant généré, valeurs par défaut, colonnes calculées).
 
-- **Supprimer** : cochez une ou plusieurs lignes (case de l'en-tête = toutes les lignes affichées), puis **Supprimer la sélection**. Une confirmation est demandée ; la suppression se fait dans **une seule transaction** : si une ligne est refusée (clé étrangère, par exemple), aucune n'est supprimée.
+- **Supprimer** : cochez une ou plusieurs lignes (case de l'en-tête = toutes les lignes de la page), puis **Supprimer la sélection**. Une confirmation est demandée ; la suppression se fait dans **une seule transaction** : si une ligne est refusée (clé étrangère, par exemple), aucune n'est supprimée.
 - **Modifier** : cliquez sur le crayon d'une ligne, changez les valeurs, puis ✓ (ou `Entrée`) pour enregistrer, ✗ (ou `Échap`) pour annuler. `Maj+Entrée` ajoute un retour à la ligne. La case **NULL** permet de mettre une valeur à NULL (une chaîne vide reste une chaîne vide). La ligne est relue après l'enregistrement : vous voyez la valeur réellement stockée (`19.9` → `19.90`).
 
 Les lignes sont identifiées par leur **clé primaire** (simple ou composite). La grille reste donc en lecture seule, avec la raison affichée, pour :

@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "DB Explorer Lite",
   "description": "Se connecter à MySQL/MariaDB ou PostgreSQL, parcourir les tables, consulter les données et exécuter des requêtes SQL.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"
@@ -198,7 +198,7 @@
           "type": "number",
           "default": 200,
           "minimum": 1,
-          "description": "Nombre de lignes affichées lors de l'aperçu d'une table."
+          "description": "Lignes par page au départ dans l'aperçu d'une table (modifiable dans l'aperçu, 1 à 1000)."
         },
         "dbExplorer.maxRows": {
           "type": "number",
