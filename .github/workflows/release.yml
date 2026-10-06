@@ -45,6 +45,30 @@ jobs:
       - name: Tests (unitaires + bout en bout PostgreSQL et MariaDB)
         run: npm test
 
+  integration:
+    # Tests dans un vrai VS Code (Electron). Non bloquant tant qu'ils n'ont pas fait leurs preuves en CI.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Mettre en cache VS Code
+        uses: actions/cache@v4
+        with:
+          path: .vscode-test
+          key: vscode-test-${{ runner.os }}-stable
+
+      - name: Tests d'intégration (VS Code sous Xvfb)
+        run: xvfb-run -a npm run test:integration
+
   build:
     needs: test
     runs-on: ubuntu-latest

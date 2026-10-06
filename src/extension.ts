@@ -37,7 +37,15 @@ import * as os from 'os';
 
 let manager: ConnectionManager | undefined;
 
-export function activate(context: vscode.ExtensionContext): void {
+/** Accès réservé aux tests d'intégration (variable DBX_TEST=1) : jamais exposé en usage normal. */
+export interface TestApi {
+  manager: ConnectionManager;
+  tree: ConnectionsTreeProvider;
+  history: QueryHistory;
+  associate(documentUri: string, connectionId: string): void;
+}
+
+export function activate(context: vscode.ExtensionContext): TestApi | undefined {
   const mgr = new ConnectionManager(context);
   manager = mgr;
   const tree = new ConnectionsTreeProvider(mgr);
@@ -748,6 +756,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   updateStatus();
+
+  if (process.env.DBX_TEST === '1') {
+    return { manager: mgr, tree, history, associate: (uri, id) => void docConnections.set(uri, id) };
+  }
+  return undefined;
 }
 
 export async function deactivate(): Promise<void> {

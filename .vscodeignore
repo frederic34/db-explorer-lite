@@ -9,3 +9,4 @@ test/**
 .test-build/**
 .github/**
 .gitignore
+.vscode-test/
