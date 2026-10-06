@@ -8,6 +8,7 @@ const { createDriver } = require('../.test-build/drivers.js');
 const { ResultsPanel } = require('../.test-build/panel.js');
 const { formatRows, streamTable } = require('../.test-build/exporter.js');
 const { buildPageQuery, buildCountQuery, parseFilter, keysetColumns } = require('../.test-build/browse.js');
+const { explainSql, planToResult } = require('../.test-build/explain.js');
 const { buildEdges, layoutEr, toMermaid } = require('../.test-build/erLayout.js');
 
 const KIND = process.argv[2];
@@ -328,6 +329,30 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
   const fr = (await db(fq.sql, fq.params)).rows.map((r) => r.slice(0, 2).join('/'));
   assert.deepEqual(fr.slice(0, 3), ['4/1', '4/2', '4/3']);
   ok('pagination par clé composite identique à OFFSET, sans OFFSET, combinée au filtre');
+
+  // ------------------------------------------------------------ EXPLAIN
+  console.log('EXPLAIN');
+  const sel = `SELECT * FROM ${T('shop', 'kk')} WHERE a = 2 AND prix > 20`;
+  for (const analyze of [false, true]) {
+    const ex = explainSql(CFG.type, sel, analyze);
+    let raw;
+    try { raw = await db(ex.primary); } catch (e) { if (!ex.fallback) { throw e; } raw = await db(ex.fallback); }
+    const plan = planToResult(CFG.type, raw, analyze);
+    assert.ok(plan.rows.length >= 1 && plan.columns.length >= 1, JSON.stringify(plan));
+    if (KIND === 'pg') {
+      assert.equal(plan.columns[0], 'Étape');
+      assert.ok(plan.rows.some((r) => /Scan/.test(r[0])), JSON.stringify(plan.rows));
+      if (analyze) { assert.ok(plan.rows.some((r) => r[0] === 'Exécution (ms)')); }
+    }
+    ok(`EXPLAIN${analyze ? ' ANALYZE' : ''} : ${plan.rows.length} ligne(s) de plan`);
+  }
+  const before = Number((await db(`SELECT COUNT(*) FROM ${T('shop', 'kk')}`)).rows[0][0]);
+  if (KIND === 'pg') {
+    await db(explainSql('postgres', `DELETE FROM ${T('shop', 'kk')} WHERE a = 5`, true).primary);
+    const after = Number((await db(`SELECT COUNT(*) FROM ${T('shop', 'kk')}`)).rows[0][0]);
+    assert.equal(after, before - 7, 'EXPLAIN ANALYZE exécute vraiment l\'écriture (d\'où la confirmation)');
+    ok('EXPLAIN ANALYZE d\'un DELETE exécute bien l\'écriture (confirmation demandée côté extension)');
+  }
 
   // nettoyage
   fs.rmSync(tmp, { recursive: true, force: true });

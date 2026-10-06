@@ -165,6 +165,23 @@
         "command": "dbExplorer.forgetSshHosts",
         "title": "Oublier les serveurs SSH approuvés",
         "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.runStatement",
+        "title": "Exécuter l'instruction sous le curseur",
+        "category": "DB Explorer",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "dbExplorer.explain",
+        "title": "Expliquer l'instruction (EXPLAIN)",
+        "category": "DB Explorer",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "dbExplorer.explainAnalyze",
+        "title": "Expliquer avec mesure (EXPLAIN ANALYZE)",
+        "category": "DB Explorer"
       }
     ],
     "menus": {
@@ -269,6 +286,16 @@
           "command": "dbExplorer.cancelQuery",
           "when": "editorLangId == sql && dbExplorer.queryRunning",
           "group": "navigation@0"
+        },
+        {
+          "command": "dbExplorer.runStatement",
+          "when": "editorLangId == sql",
+          "group": "navigation"
+        },
+        {
+          "command": "dbExplorer.explain",
+          "when": "editorLangId == sql",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
@@ -319,6 +346,30 @@
         {
           "command": "dbExplorer.cancelQuery",
           "when": "dbExplorer.queryRunning"
+        },
+        {
+          "command": "dbExplorer.runStatement",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "dbExplorer.explain",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "dbExplorer.explainAnalyze",
+          "when": "editorLangId == sql"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dbExplorer.runStatement",
+          "when": "editorLangId == sql",
+          "group": "1_dbx@1"
+        },
+        {
+          "command": "dbExplorer.explain",
+          "when": "editorLangId == sql",
+          "group": "1_dbx@2"
         }
       ]
     },
@@ -327,6 +378,18 @@
         "command": "dbExplorer.runQuery",
         "key": "ctrl+alt+enter",
         "mac": "cmd+alt+enter",
+        "when": "editorTextFocus && editorLangId == sql"
+      },
+      {
+        "command": "dbExplorer.runStatement",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "editorTextFocus && editorLangId == sql"
+      },
+      {
+        "command": "dbExplorer.explain",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
         "when": "editorTextFocus && editorLangId == sql"
       }
     ],
@@ -381,7 +444,7 @@
     "watch": "esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js"
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js test/editor.test.js"
   },
   "dependencies": {
     "mysql2": "^3.11.0",

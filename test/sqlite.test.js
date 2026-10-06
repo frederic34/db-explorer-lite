@@ -283,3 +283,13 @@ test('filtres par colonne et pagination par clé (SQLite)', async () => {
   assert.deepEqual(r.rows.map((x) => [Number(x[0]), Number(x[1])]), [[1, 2]]);
   await d.dispose();
 });
+
+test('EXPLAIN QUERY PLAN : plan lisible', async () => {
+  const d = createDriver(cfg(), '', opts);
+  const { explainSql, planToResult } = require('../.test-build/explain.js');
+  const raw = await d.query(explainSql('sqlite', 'SELECT * FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.total > 1;', false).primary);
+  const plan = planToResult('sqlite', raw, false);
+  assert.deepEqual(plan.columns, ['Étape', 'Remarque']);
+  assert.ok(plan.rows.some((r) => /SCAN/.test(r[0]) && /parcours complet/.test(r[1])), JSON.stringify(plan.rows));
+  await d.dispose();
+});

@@ -7,8 +7,10 @@ import { buildEdges, ErTable, layoutEr, toMermaid } from './erLayout';
 import { registerCompletion } from './completionProvider';
 import { QueryHistory } from './history';
 import { SchemaCache } from './schemaCache';
-import { assessRun, splitStatements } from './sqlGuard';
-import { ConnectionConfig } from './types';
+import { analyze as analyzeSql, assessRun, splitStatements } from './sqlGuard';
+import { explainSql, isExplain, planToResult } from './explain';
+import { statementAt } from './statementAt';
+import { ConnectionConfig, QueryResult } from './types';
 import {
   ColumnNode,
   ConnectionNode,
@@ -136,7 +138,11 @@ export function activate(context: vscode.ExtensionContext): void {
   ];
 
   /** Exécute une requête libre et affiche le résultat (lecture seule). */
-  async function execute(connectionId: string, sql: string): Promise<void> {
+  async function execute(
+    connectionId: string,
+    sql: string,
+    opts: { fallback?: string; transform?: (r: QueryResult) => QueryResult; confirmExtra?: { message: string; detail: string } } = {},
+  ): Promise<void> {
     const cfg = mgr.get(connectionId);
     if (!cfg) {
       return;
@@ -154,11 +160,12 @@ export function activate(context: vscode.ExtensionContext): void {
       results.showError(cfg.name, sql, verdict.blocked, badges);
       return;
     }
-    if (verdict.confirm) {
+    const confirm = opts.confirmExtra ?? verdict.confirm;
+    if (confirm) {
       const run = 'Exécuter';
       const choice = await vscode.window.showWarningMessage(
-        verdict.confirm.message,
-        { modal: true, detail: verdict.confirm.detail },
+        confirm.message,
+        { modal: true, detail: confirm.detail },
         run,
       );
       if (choice !== run) {
@@ -183,10 +190,20 @@ export function activate(context: vscode.ExtensionContext): void {
           const parts = splitStatements(sql, cfg.type);
           let result;
           try {
-            result =
-              driver.script && parts.length > 1
-                ? await driver.script(parts, token)
-                : await driver.query(sql, undefined, token);
+            try {
+              result =
+                driver.script && parts.length > 1
+                  ? await driver.script(parts, token)
+                  : await driver.query(sql, undefined, token);
+            } catch (err) {
+              if (!opts.fallback || token.requested) {
+                throw err;
+              }
+              result = await driver.query(opts.fallback, undefined, token);
+            }
+            if (opts.transform) {
+              result = opts.transform(result);
+            }
           } finally {
             // Même en cas d'erreur : un script a pu modifier la structure avant d'échouer.
             if (verdict.statements.some((s) => s.ddl)) {
@@ -205,6 +222,51 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       },
     );
+  }
+
+  /** Instruction sous le curseur (ou sélection) : exécution, EXPLAIN, EXPLAIN ANALYZE. */
+  async function runCurrent(mode: 'run' | 'explain' | 'analyze'): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage('Ouvrez un fichier SQL.');
+      return;
+    }
+    const id = await connectionForDocument(editor.document);
+    const cfg = id ? mgr.get(id) : undefined;
+    if (!id || !cfg) {
+      return;
+    }
+    const doc = editor.document;
+    const text = editor.selection.isEmpty
+      ? statementAt(doc.getText(), doc.offsetAt(editor.selection.active), cfg.type)?.sql
+      : doc.getText(editor.selection);
+    const sql = text?.trim();
+    if (!sql) {
+      vscode.window.showInformationMessage('Aucune instruction sous le curseur.');
+      return;
+    }
+    if (mode === 'run' || isExplain(sql)) {
+      await execute(id, sql);
+      return;
+    }
+    if (splitStatements(sql, cfg.type).length !== 1) {
+      vscode.window.showInformationMessage('EXPLAIN porte sur une seule instruction : placez le curseur dans l\'une d\'elles.');
+      return;
+    }
+    const analyze = mode === 'analyze';
+    if (analyze && cfg.type === 'sqlite') {
+      vscode.window.showInformationMessage('SQLite ne mesure pas l\'exécution : plan estimé affiché.');
+    }
+    const useAnalyze = analyze && cfg.type !== 'sqlite';
+    const plan = explainSql(cfg.type, sql, useAnalyze);
+    const writes = analyze && analyzeSql(sql, cfg.type).some((x) => x.kind === 'write');
+    await execute(id, plan.primary, {
+      fallback: plan.fallback,
+      transform: (r) => planToResult(cfg.type, r, useAnalyze),
+      confirmExtra: useAnalyze && writes
+        ? { message: 'EXPLAIN ANALYZE exécute réellement l\'instruction. Continuer ?', detail: sql }
+        : undefined,
+    });
   }
 
   /** Aperçu paginé d'une table : page, tri et filtre côté serveur ; édition via la clé primaire. */
@@ -530,6 +592,10 @@ export function activate(context: vscode.ExtensionContext): void {
         await execute(id, sql);
       }
     }),
+
+    vscode.commands.registerCommand('dbExplorer.runStatement', () => runCurrent('run')),
+    vscode.commands.registerCommand('dbExplorer.explain', () => runCurrent('explain')),
+    vscode.commands.registerCommand('dbExplorer.explainAnalyze', () => runCurrent('analyze')),
 
     vscode.commands.registerCommand('dbExplorer.selectConnection', async () => {
       const editor = vscode.window.activeTextEditor;
