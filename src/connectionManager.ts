@@ -74,6 +74,43 @@ export class ConnectionManager {
     this.changed.fire();
   }
 
+  /** Noms des groupes existants, triés. */
+  groups(): string[] {
+    return [...new Set(this.list().flatMap((c) => (c.group ? [c.group] : [])))].sort((a, b) => a.localeCompare(b));
+  }
+
+  /** Range des connexions dans un groupe (undefined = hors de tout groupe). */
+  async setGroup(ids: string[], group: string | undefined): Promise<void> {
+    const name = group?.trim() || undefined;
+    await this.ctx.globalState.update(
+      STORE_KEY,
+      this.list().map((c) => (ids.includes(c.id) ? { ...c, group: name } : c)),
+    );
+    this.changed.fire();
+  }
+
+  /** Renomme un groupe ; si le nouveau nom existe déjà, les deux sont fusionnés. */
+  async renameGroup(from: string, to: string): Promise<void> {
+    const name = to.trim();
+    if (!name) {
+      throw new Error('Le nom du groupe est vide.');
+    }
+    await this.ctx.globalState.update(
+      STORE_KEY,
+      this.list().map((c) => (c.group === from ? { ...c, group: name } : c)),
+    );
+    this.changed.fire();
+  }
+
+  /** Supprime un groupe : ses connexions sont conservées, hors de tout groupe. */
+  async removeGroup(name: string): Promise<void> {
+    await this.ctx.globalState.update(
+      STORE_KEY,
+      this.list().map((c) => (c.group === name ? { ...c, group: undefined } : c)),
+    );
+    this.changed.fire();
+  }
+
   async remove(id: string): Promise<void> {
     await this.ctx.globalState.update(
       STORE_KEY,

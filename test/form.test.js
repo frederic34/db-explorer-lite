@@ -11,6 +11,7 @@ function manager(over = {}) {
   const calls = { test: [], save: [] };
   return {
     calls,
+    groups: () => ['Clients', 'Production'],
     getPassword: async () => 'mdp-stocké',
     getSshSecret: async () => 'secret-ssh-stocké',
     test: async (cfg, pw, ssh) => { calls.test.push({ cfg, pw, ssh }); },

@@ -3,6 +3,19 @@ import { ConnectionManager } from './connectionManager';
 import { ColumnInfo, ConnectionConfig, TableInfo } from './types';
 import { errorMessage } from './util';
 
+/** Dossier de connexions. */
+export class GroupNode extends vscode.TreeItem {
+  constructor(
+    public readonly name: string,
+    public readonly count: number,
+  ) {
+    super(name, vscode.TreeItemCollapsibleState.Expanded);
+    this.contextValue = 'group';
+    this.iconPath = new vscode.ThemeIcon('folder');
+    this.description = String(count);
+  }
+}
+
 export class ConnectionNode extends vscode.TreeItem {
   constructor(public readonly config: ConnectionConfig) {
     super(config.name, vscode.TreeItemCollapsibleState.Collapsed);
@@ -64,7 +77,7 @@ export class ColumnNode extends vscode.TreeItem {
   }
 }
 
-export type DbNode = ConnectionNode | ContainerNode | TableNode | ColumnNode;
+export type DbNode = GroupNode | ConnectionNode | ContainerNode | TableNode | ColumnNode;
 
 export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<DbNode | undefined>();
@@ -81,6 +94,12 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> 
     this._onDidChangeTreeData.fire(undefined);
   }
 
+  private connectionNode(c: ConnectionConfig): ConnectionNode {
+    const node = new ConnectionNode(c);
+    this.roots.set(c.id, node);
+    return node;
+  }
+
   /** Relit une seule connexion (après un CREATE / ALTER / DROP exécuté dans l'éditeur). */
   refreshConnection(id: string): void {
     this._onDidChangeTreeData.fire(this.roots.get(id));
@@ -93,12 +112,15 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> 
   async getChildren(element?: DbNode): Promise<DbNode[]> {
     try {
       if (!element) {
-        this.roots.clear();
-        return this.manager.list().map((c) => {
-          const node = new ConnectionNode(c);
-          this.roots.set(c.id, node);
-          return node;
-        });
+        const all = this.manager.list();
+        const groups = [...new Set(all.flatMap((c) => (c.group ? [c.group] : [])))].sort((a, b) => a.localeCompare(b));
+        return [
+          ...groups.map((g) => new GroupNode(g, all.filter((c) => c.group === g).length)),
+          ...all.filter((c) => !c.group).map((c) => this.connectionNode(c)),
+        ];
+      }
+      if (element instanceof GroupNode) {
+        return this.manager.list().filter((c) => c.group === element.name).map((c) => this.connectionNode(c));
       }
       if (element instanceof ConnectionNode) {
         const driver = await this.manager.getDriver(element.config.id);

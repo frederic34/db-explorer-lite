@@ -15,10 +15,23 @@ import {
   ConnectionsTreeProvider,
   ContainerNode,
   DbNode,
+  GroupNode,
   TableNode,
 } from './treeProvider';
 import { CancelToken, errorMessage, quoteIdent } from './util';
 import { openConnectionForm } from './connectionForm';
+import {
+  defaultSourcePaths,
+  guessSource,
+  ImportResult,
+  parseConnectionsFile,
+  planImport,
+  serializeConnections,
+  SOURCES,
+} from './importers';
+import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
 
 let manager: ConnectionManager | undefined;
 
@@ -231,6 +244,71 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
+  /** Importe des connexions depuis un export de l'extension, ~/.pgpass, ~/.pg_service.conf ou ~/.my.cnf. */
+  async function importConnections(): Promise<void> {
+    type Source = { label: string; description?: string; path?: string; source?: keyof typeof SOURCES | 'json'; browse?: boolean };
+    const found: Source[] = [];
+    for (const s of defaultSourcePaths(process.env, os.homedir(), process.platform)) {
+      if (fs.existsSync(s.path)) {
+        found.push({ label: SOURCES[s.kind].label, description: s.path, path: s.path, source: s.kind });
+      }
+    }
+    const choice = await vscode.window.showQuickPick<Source>(
+      [
+        ...found,
+        { label: '$(file) Choisir un fichier…', description: 'export JSON de DB Explorer Lite, .pgpass, .pg_service.conf, .my.cnf', browse: true },
+      ],
+      { placeHolder: 'Importer des connexions depuis…' },
+    );
+    if (!choice) {
+      return;
+    }
+    let file = choice.path;
+    if (choice.browse) {
+      const picked = await vscode.window.showOpenDialog({ canSelectMany: false, title: 'Importer des connexions', openLabel: 'Importer' });
+      file = picked?.[0]?.fsPath;
+    }
+    if (!file) {
+      return;
+    }
+    const size = fs.statSync(file).size;
+    if (size > 5 * 1024 * 1024) {
+      throw new Error('Fichier trop volumineux (5 Mo au maximum).');
+    }
+    const content = fs.readFileSync(file, 'utf8');
+    const kind = choice.source ?? guessSource(file, content);
+    if (!kind) {
+      throw new Error("Type de fichier non reconnu (attendu : export JSON, .pgpass, .pg_service.conf ou .my.cnf).");
+    }
+    const parsed: ImportResult = kind === 'json' ? parseConnectionsFile(content) : SOURCES[kind].parse(content);
+    const planned = planImport(parsed.items, mgr.list());
+    if (planned.length === 0) {
+      vscode.window.showWarningMessage(
+        `Aucune connexion importable dans ${file}.` + (parsed.skipped.length ? ` ${parsed.skipped.slice(0, 3).join(' ; ')}` : ''),
+      );
+      return;
+    }
+    const picks = await vscode.window.showQuickPick(
+      planned.map((p) => ({ label: p.label, detail: p.detail, picked: !p.duplicate, item: p })),
+      { canPickMany: true, placeHolder: `${planned.length} connexion(s) trouvée(s) : cochez celles à importer`, matchOnDetail: true },
+    );
+    if (!picks || picks.length === 0) {
+      return;
+    }
+    for (const p of picks) {
+      await mgr.save({ id: randomUUID(), ...p.item.config }, p.item.password);
+    }
+    const withoutPassword = picks.filter((p) => p.item.config.type !== 'sqlite' && !p.item.password).length;
+    let msg = `${picks.length} connexion(s) importée(s).`;
+    if (withoutPassword > 0) {
+      msg += ` ${withoutPassword} sans mot de passe : saisissez-le en modifiant la connexion.`;
+    }
+    if (parsed.skipped.length > 0) {
+      msg += ` ${parsed.skipped.length} entrée(s) ignorée(s) (${parsed.skipped.slice(0, 2).join(' ; ')}${parsed.skipped.length > 2 ? '…' : ''}).`;
+    }
+    vscode.window.showInformationMessage(msg);
+  }
+
   /** Ouvre le formulaire de connexion (test et enregistrement s'y font). */
   function addConnection(): void {
     openConnectionForm(mgr);
@@ -259,6 +337,92 @@ export function activate(context: vscode.ExtensionContext): void {
       if (choice === remove) {
         await mgr.remove(node.config.id);
         updateStatus();
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.setGroup', async (node?: ConnectionNode) => {
+      if (!node) {
+        return;
+      }
+      const NEW = '$(add) Nouveau groupe…';
+      const NONE = '$(close) Aucun groupe';
+      const pick = await vscode.window.showQuickPick(
+        [
+          ...mgr.groups().map((g) => ({ label: g, description: g === node.config.group ? 'actuel' : undefined })),
+          { label: NEW, alwaysShow: true },
+          { label: NONE, alwaysShow: true },
+        ],
+        { placeHolder: `Ranger « ${node.config.name} » dans un groupe` },
+      );
+      if (!pick) {
+        return;
+      }
+      let group: string | undefined;
+      if (pick.label === NEW) {
+        group = (await vscode.window.showInputBox({ prompt: 'Nom du nouveau groupe', validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire') }))?.trim();
+        if (!group) {
+          return;
+        }
+      } else if (pick.label !== NONE) {
+        group = pick.label;
+      }
+      await mgr.setGroup([node.config.id], group);
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.renameGroup', async (node?: GroupNode) => {
+      if (!node) {
+        return;
+      }
+      const name = await vscode.window.showInputBox({
+        prompt: `Nouveau nom du groupe « ${node.name} »`,
+        value: node.name,
+        validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+      });
+      if (name && name.trim() !== node.name) {
+        await mgr.renameGroup(node.name, name);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.removeGroup', async (node?: GroupNode) => {
+      if (!node) {
+        return;
+      }
+      const remove = 'Supprimer le groupe';
+      const choice = await vscode.window.showWarningMessage(
+        `Supprimer le groupe « ${node.name} » ?`,
+        { modal: true, detail: `Ses ${node.count} connexion(s) sont conservées, hors de tout groupe.` },
+        remove,
+      );
+      if (choice === remove) {
+        await mgr.removeGroup(node.name);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.exportConnections', async () => {
+      const all = mgr.list();
+      if (all.length === 0) {
+        vscode.window.showInformationMessage('Aucune connexion à exporter.');
+        return;
+      }
+      const uri = await vscode.window.showSaveDialog({
+        filters: { JSON: ['json'] },
+        saveLabel: 'Exporter',
+        defaultUri: vscode.Uri.file(`${os.homedir()}/connexions-db-explorer.json`),
+      });
+      if (!uri) {
+        return;
+      }
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(serializeConnections(all), 'utf8'));
+      vscode.window.showInformationMessage(
+        `${all.length} connexion(s) exportée(s) dans ${uri.fsPath}. Les mots de passe ne sont jamais exportés.`,
+      );
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.importConnections', async () => {
+      try {
+        await importConnections();
+      } catch (err) {
+        vscode.window.showErrorMessage(`Import impossible : ${errorMessage(err)}`);
       }
     }),
 

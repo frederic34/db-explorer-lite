@@ -21,6 +21,8 @@ export interface ConnectionConfig {
   user: string;
   /** SQLite : chemin du fichier de base (lecture seule). */
   file?: string;
+  /** Dossier de l'arbre dans lequel la connexion est rangée (un seul niveau). */
+  group?: string;
   /** MySQL : optionnelle (vide = toutes les bases). PostgreSQL : obligatoire. */
   database?: string;
   ssl?: boolean;

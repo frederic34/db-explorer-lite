@@ -18,6 +18,7 @@ exports.build = () =>
       form: path.join(root, 'src/connectionForm.ts'),
       manager: path.join(root, 'src/connectionManager.ts'),
       sqliteWorker: path.join(root, 'src/sqliteWorker.ts'),
+      importers: path.join(root, 'src/importers.ts'),
       tree: path.join(root, 'src/treeProvider.ts'),
       erLayout: path.join(root, 'src/erLayout.ts'),
       diagramPanel: path.join(root, 'src/diagramPanel.ts'),

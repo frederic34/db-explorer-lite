@@ -51,7 +51,7 @@
     "viewsWelcome": [
       {
         "view": "dbExplorer.connections",
-        "contents": "Aucune connexion configurée.\n[Ajouter une connexion](command:dbExplorer.addConnection)"
+        "contents": "Aucune connexion configurée.\n[Ajouter une connexion](command:dbExplorer.addConnection)\n[Importer des connexions](command:dbExplorer.importConnections)"
       }
     ],
     "commands": [
@@ -110,6 +110,31 @@
         "icon": "$(type-hierarchy)"
       },
       {
+        "command": "dbExplorer.setGroup",
+        "title": "Ranger dans un groupe…",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.renameGroup",
+        "title": "Renommer le groupe",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.removeGroup",
+        "title": "Supprimer le groupe",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.exportConnections",
+        "title": "Exporter les connexions (sans mots de passe)",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.importConnections",
+        "title": "Importer des connexions (JSON, .pgpass, .my.cnf, pg_service)",
+        "category": "DB Explorer"
+      },
+      {
         "command": "dbExplorer.selectConnection",
         "title": "Choisir la connexion de cet éditeur",
         "category": "DB Explorer"
@@ -153,6 +178,16 @@
           "command": "dbExplorer.refresh",
           "when": "view == dbExplorer.connections",
           "group": "navigation@2"
+        },
+        {
+          "command": "dbExplorer.importConnections",
+          "when": "view == dbExplorer.connections",
+          "group": "1_connections@1"
+        },
+        {
+          "command": "dbExplorer.exportConnections",
+          "when": "view == dbExplorer.connections",
+          "group": "1_connections@2"
         }
       ],
       "view/item/inline": [
@@ -168,6 +203,21 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "dbExplorer.setGroup",
+          "when": "view == dbExplorer.connections && viewItem == connection",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "dbExplorer.renameGroup",
+          "when": "view == dbExplorer.connections && viewItem == group",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "dbExplorer.removeGroup",
+          "when": "view == dbExplorer.connections && viewItem == group",
+          "group": "3_manage@2"
+        },
         {
           "command": "dbExplorer.previewTable",
           "when": "view == dbExplorer.connections && viewItem =~ /^(table|view)$/",
@@ -222,6 +272,18 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "dbExplorer.setGroup",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.renameGroup",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.removeGroup",
+          "when": "false"
+        },
         {
           "command": "dbExplorer.editConnection",
           "when": "false"
@@ -319,7 +381,7 @@
     "watch": "esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js"
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js"
   },
   "dependencies": {
     "mysql2": "^3.11.0",

@@ -9,6 +9,7 @@ import { errorMessage } from './util';
 interface FormValues {
   type: DbType;
   name: string;
+  group: string;
   host: string;
   port: string;
   user: string;
@@ -31,6 +32,8 @@ interface FormValues {
 
 interface InitData {
   editing: boolean;
+  /** Groupes existants (suggestions du champ « Groupe »). */
+  groups: string[];
   values: Omit<FormValues, 'password' | 'sshSecret'>;
 }
 
@@ -58,9 +61,11 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
   const type: DbType = existing?.type ?? 'mysql';
   const init: InitData = {
     editing,
+    groups: manager.groups(),
     values: {
       type,
       name: existing?.name ?? '',
+      group: existing?.group ?? '',
       host: existing?.host ?? 'localhost',
       port: String(existing?.port ?? defaultPort(type)),
       user: existing?.user ?? defaultUser(type),
@@ -96,6 +101,7 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
           user: '',
           file,
           readOnly: true,
+          group: v.group.trim() || undefined,
         },
       };
     }
@@ -147,6 +153,7 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
         user: v.user.trim(),
         database,
         ssl: v.ssl === true,
+        group: v.group.trim() || undefined,
         readOnly: v.readOnly === true || undefined,
         production: v.production === true || undefined,
         ssh,
@@ -309,7 +316,8 @@ const SCRIPT = String.raw`
   var touched = { port: init.editing, user: init.editing, name: init.editing, database: init.editing };
 
   var form = $('form'), status = $('status');
-  var fields = { name: $('name'), host: $('host'), port: $('port'), user: $('user'),
+  (init.groups || []).forEach(function (g) { var o = document.createElement('option'); o.value = g; $('groupList').appendChild(o); });
+  var fields = { name: $('name'), group: $('group'), host: $('host'), port: $('port'), user: $('user'),
                  password: $('password'), database: $('database'),
                  sshHost: $('sshHost'), sshPort: $('sshPort'), sshUser: $('sshUser'), sshKey: $('sshKey'), file: $('file') };
 
@@ -466,7 +474,7 @@ const SCRIPT = String.raw`
   // --- Actions ---------------------------------------------------------------------------
   function values() {
     return {
-      type: currentType(), file: fields.file.value, name: fields.name.value, host: fields.host.value, port: fields.port.value,
+      type: currentType(), file: fields.file.value, group: fields.group.value, name: fields.name.value, host: fields.host.value, port: fields.port.value,
       user: fields.user.value, password: fields.password.value, database: fields.database.value,
       ssl: $('ssl').checked, readOnly: $('readOnly').checked, production: $('production').checked,
       sshOn: $('sshOn').checked, sshHost: $('sshHost').value, sshPort: $('sshPort').value, sshUser: $('sshUser').value,
@@ -645,6 +653,13 @@ function buildHtml(init: InitData, nonce: string): string {
       <label class="check" style="margin-top:6px"><input type="checkbox" id="readOnly"> Lecture seule (aucune écriture : grille et éditeur SQL, refusée aussi par le serveur)</label>
     </fieldset>
 
+    </div>
+
+    <div>
+      <label class="field" for="group">Groupe (dossier de l'arbre)</label>
+      <input type="text" id="group" list="groupList" autocomplete="off" maxlength="100" placeholder="Facultatif : Production, Clients, Local…">
+      <datalist id="groupList"></datalist>
+      <div class="err" id="err-group"></div>
     </div>
 
     <div>
