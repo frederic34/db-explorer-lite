@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "DB Explorer Lite",
   "description": "Se connecter à MySQL/MariaDB, PostgreSQL ou SQLite, parcourir les tables, consulter et exporter les données, exécuter des requêtes SQL, afficher la structure et le diagramme des relations.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "local",
   "license": "MIT",
   "icon": "resources/icon.png",

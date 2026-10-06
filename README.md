@@ -12,7 +12,8 @@ Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fich
 - **Éditeur SQL** : clic droit → *Nouvelle requête SQL*, ou commande `DB Explorer: Nouvelle requête SQL`. Autocomplétion, historique, annulation : voir [Éditeur SQL](#éditeur-sql).
 - **Garde-fous production** : connexions *lecture seule* et *production*, confirmation avant les requêtes dangereuses ; voir [Sécurité](#sécurité).
 - **Tunnel SSH intégré** ; voir [Tunnel SSH](#tunnel-ssh).
-- **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ dans la barre de l'éditeur. La **sélection** est exécutée si elle existe, sinon **tout le fichier**.
+- **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ : la **sélection**, sinon **tout le fichier**. `Ctrl+Maj+Entrée` n'exécute que **l'instruction sous le curseur** ; `Ctrl+Alt+E` affiche son **plan d'exécution** (EXPLAIN). Voir [Éditeur SQL](#éditeur-sql).
+- **Dossiers, import et export de connexions** (JSON sans mot de passe, `~/.pgpass`, `~/.my.cnf`, `~/.pg_service.conf`) : voir [Organiser ses connexions](#organiser-ses-connexions).
 - **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées. Un script de plusieurs instructions affiche **un onglet par résultat**.
 - **Ajouter, modifier et supprimer des lignes** depuis l'aperçu d'une table : voir la section [Ajouter, modifier et supprimer des données](#ajouter-modifier-et-supprimer-des-données).
 - **Structure d'une table** (index, contraintes, DDL) et **diagramme des relations** d'un schéma : voir [Structure et diagramme](#structure-et-diagramme).
@@ -53,6 +54,12 @@ Ou dans VS Code : `Extensions` → `…` → *Installer à partir d'un VSIX…*
 | `dbExplorer.confirmOnProduction` | `true` | Demander confirmation avant toute écriture sur une connexion marquée *production* |
 | `dbExplorer.csvSeparator` | `,` | Séparateur CSV (`,`, `;` ou `tab`) — `;` convient mieux à Excel en français |
 
+## Organiser ses connexions
+
+- **Dossiers** : le champ *Groupe* du formulaire (avec suggestions des dossiers existants) range la connexion dans un dossier de l'arbre ; clic droit sur une connexion → *Déplacer dans un dossier…*, sur un dossier → *Renommer* / *Supprimer le dossier* (les connexions qu'il contient reviennent à la racine).
+- **Exporter** (icône de la vue, ou commande *Exporter les connexions…*) : un fichier JSON sans identifiant ni **aucun mot de passe** (ni secret SSH). Il peut être partagé ou versionné.
+- **Importer** : commande *Importer des connexions…* (lien dans la vue vide). Formats reconnus : le JSON ci-dessus, `~/.pgpass`, `~/.pg_service.conf`, `~/.my.cnf`. Les fichiers par défaut présents sur la machine sont proposés. Vous cochez les connexions à créer (les doublons sont décochés) ; les mots de passe de `.pgpass` / `.my.cnf` sont placés dans le SecretStorage, ceux d'un JSON importé sont toujours ignorés. Les entrées invalides sont écartées avec leur raison ; les sockets Unix et les lignes à joker de `.pgpass` ne sont pas importés.
+
 ## Parcourir une table
 
 L'aperçu d'une table lit **une page à la fois** (200 lignes par défaut) : ouvrir une table de plusieurs millions de lignes ne charge que la première page.
@@ -60,6 +67,8 @@ L'aperçu d'une table lit **une page à la fois** (200 lignes par défaut) : ouv
 - **Pagination** : ⏮ ◀ ▶ pour naviguer, ⟳ pour actualiser, sélecteur de **lignes par page** (25 à 1000). La position s'affiche « Lignes 101–200 sur 250 » ; le total est compté en arrière-plan et apparaît dès qu'il est connu (sur une très grosse table, il n'empêche jamais d'afficher la page). Il reste exact après vos propres insertions et suppressions ; ⟳ le recompte.
 - **Tri** : clic sur l'en-tête d'une colonne — croissant, décroissant, puis retour à l'ordre de la clé primaire. Le tri est exécuté par le serveur sur toute la table ; la clé primaire sert de départage, donc aucune ligne n'est répétée ou oubliée d'une page à l'autre.
 - **Filtre** : le texte saisi est recherché (« contient », sans tenir compte de la casse) dans **toutes les colonnes textuelles de la table**, pas seulement dans la page affichée. `%` et `_` sont cherchés tels quels. Sur une grosse table, ce filtre parcourt toutes les lignes : il peut prendre du temps s'il n'y a pas d'index utilisable.
+- **Filtre par colonne** : dans le même champ, des conditions séparées par `;` — `prix > 20 ; nom contient dupont ; stock vide`. Opérateurs : `=`, `!=`, `>`, `>=`, `<`, `<=`, `contient` (ou `~`), `commence par`, `finit par`, `vide`, `non vide` ; `'valeur avec espaces'` entre guillemets. Ce qui n'est pas une condition sur une colonne connue reste une recherche dans toutes les colonnes.
+- **Pagination par clé** : sans tri choisi, sur une table à clé primaire d'entiers, de texte ou d'uuid, la page suivante est lue par `WHERE clé > dernière valeur` au lieu de `OFFSET` : le temps de lecture ne grandit plus avec la profondeur. Dans les autres cas (tri, pas de clé, clé d'un autre type) l'extension utilise `OFFSET`.
 - Changer de page, de tri ou de filtre efface la sélection de lignes et ferme toute saisie en cours.
 
 ## Ajouter, modifier et supprimer des données
@@ -70,6 +79,9 @@ Dans l'**aperçu d'une table** (icône « œil »), la grille est éditable :
 
 - **Supprimer** : cochez une ou plusieurs lignes (case de l'en-tête = toutes les lignes de la page), puis **Supprimer la sélection**. Une confirmation est demandée ; la suppression se fait dans **une seule transaction** : si une ligne est refusée (clé étrangère, par exemple), aucune n'est supprimée.
 - **Modifier** : cliquez sur le crayon d'une ligne, changez les valeurs, puis ✓ (ou `Entrée`) pour enregistrer, ✗ (ou `Échap`) pour annuler. `Maj+Entrée` ajoute un retour à la ligne. La case **NULL** permet de mettre une valeur à NULL (une chaîne vide reste une chaîne vide). La ligne est relue après l'enregistrement : vous voyez la valeur réellement stockée (`19.9` → `19.90`).
+
+- **Colonnes JSON** (`json` / `jsonb`, MySQL `JSON`) : le JSON s'ouvre **indenté** dans un champ à chasse fixe, vérifié à la frappe (bordure rouge et message si invalide, enregistrement bloqué) ; le bouton **{ }** met en forme, `Entrée` insère une ligne et `Ctrl+Entrée` enregistre. Un JSON simplement indenté n'est pas une modification ; le texte est envoyé tel que saisi (les grands nombres ne sont pas altérés). Sous MariaDB, `JSON` est du `LONGTEXT` : champ texte ordinaire.
+- **Dates et heures** (`date`, `time`, `datetime`, `timestamp` sans fuseau) : un **sélecteur natif** à côté du champ texte (qui reste libre) et un bouton **⏱** pour « maintenant ». Les types avec fuseau horaire restent en texte, pour ne pas perdre le décalage.
 
 Les lignes sont identifiées par leur **clé primaire** (simple ou composite). La grille reste donc en lecture seule, avec la raison affichée, pour :
 
@@ -105,6 +117,8 @@ Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur 
 - **Autocomplétion** : mots-clés, bases / schémas, tables, colonnes ; les alias (`FROM clients c` → `c.`) sont compris. Le schéma est lu à la demande et gardé 5 minutes (actualiser la connexion le relit).
 - **Historique** : commande `DB Explorer: Historique des requêtes` (200 dernières, doublons fusionnés, la plus récente en premier) ; *Effacer l'historique des requêtes* le vide.
 - **Plusieurs instructions** : sous MySQL / MariaDB, un script est découpé et exécuté sur **une seule connexion** (tables temporaires, variables, transactions) ; une erreur indique « Instruction k/N ». Le résultat de **chaque** instruction est affiché dans un onglet (PostgreSQL, MariaDB / MySQL et SQLite) ; la durée n'est indiquée que pour l'ensemble sous PostgreSQL et SQLite.
+- **Instruction sous le curseur** : `Ctrl+Maj+Entrée` (`Cmd+Maj+Entrée`), bouton de la barre de l'éditeur ou menu contextuel. Les instructions sont délimitées par leurs `;` (hors chaînes, commentaires et blocs `$$`) ; une sélection a la priorité.
+- **EXPLAIN** : `Ctrl+Alt+E` (`Cmd+Alt+E`) ou bouton de la barre de l'éditeur affiche un **plan lisible** : une ligne par étape, indentée, avec coût, lignes estimées et alertes (parcours séquentiel / complet) — PostgreSQL (`FORMAT JSON`), MariaDB / MySQL, SQLite (`EXPLAIN QUERY PLAN`). La commande *Expliquer avec mesure (EXPLAIN ANALYZE)* ajoute les temps et lignes réels, mais **exécute réellement** l'instruction : une confirmation est demandée pour une écriture, qui reste soumise aux gardes-fous (refusée en lecture seule). SQLite ne mesure pas l'exécution.
 - **Annulation** : `DB Explorer: Annuler la requête en cours` (ou l'indicateur dans la barre d'état) interrompt la requête côté serveur (`pg_cancel_backend`, `KILL QUERY`).
 
 ## Sécurité
@@ -160,6 +174,15 @@ npm test pg                                              # une seule base : « p
 - `test/e2e.js` : la vraie grille (jsdom) → panneau de résultats → pilote → vraie base : édition, insertion, suppression, transactions, pagination, tri, filtre, messages périmés ou forgés. Le jeu de données (`test/seed.js`) est recréé à chaque exécution : **n'utilisez que des bases jetables**.
 - Sans base joignable, les tests de bout en bout sont ignorés en local ; en CI (ou avec `DBX_REQUIRE_DB=1`) ils échouent. Les connexions se règlent par `TEST_PG_*` / `TEST_MYSQL_*` (voir `test/config.js`).
 - La CI exécute ces tests (avec des bases en service) avant de construire le `.vsix` ; une release n'est publiée que s'ils passent.
+
+#### Tests d'intégration dans un vrai VS Code
+
+```bash
+npm run test:integration            # télécharge VS Code (réseau requis) puis lance la suite Mocha dans l'hôte d'extensions
+xvfb-run -a npm run test:integration  # Linux sans écran
+```
+
+`test/integration/` vérifie l'activation, l'enregistrement de toutes les commandes déclarées, l'arbre, une base SQLite (worker + WebAssembly sous le Node d'Electron), l'instruction sous le curseur et l'EXPLAIN. Le contenu des webviews n'est pas inspectable depuis l'hôte : il reste couvert par les tests jsdom. Dans la CI, ce job est **non bloquant** (`continue-on-error`) le temps de faire ses preuves.
 
 ### Publier une version
 

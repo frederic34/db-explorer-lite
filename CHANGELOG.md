@@ -2,6 +2,18 @@
 
 Toutes les évolutions notables de DB Explorer Lite. Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions selon [SemVer](https://semver.org/lang/fr/).
 
+## [0.8.0] — 2026-10-06
+
+### Ajouté
+- **Connexions** : dossiers dans l'arbre (champ *Groupe*, renommer / supprimer un dossier), **export JSON sans mot de passe**, **import** depuis ce JSON, `~/.pgpass`, `~/.pg_service.conf` et `~/.my.cnf` (aperçu, doublons décochés, entrées invalides écartées avec leur raison).
+- **Grille** : **filtre par colonne** dans le champ de filtre (`prix > 20 ; nom contient dupont ; stock vide`) et **pagination par clé** (sans `OFFSET`) sur les tables à clé primaire entière, texte ou uuid.
+- **Éditeur SQL** : exécuter **l'instruction sous le curseur** (`Ctrl+Maj+Entrée`), **EXPLAIN** (`Ctrl+Alt+E`) et **EXPLAIN ANALYZE** avec un plan lisible (une ligne par étape, indentée, alertes de parcours complet) pour PostgreSQL, MariaDB / MySQL et SQLite.
+- **Édition de la grille** : colonnes JSON indentées et validées (bouton « mise en forme »), sélecteurs natifs pour les dates, heures et datetimes, bouton « maintenant ».
+- Tests d'intégration dans un vrai VS Code (`@vscode/test-electron`) et job CI non bloquant.
+
+### Modifié
+- PostgreSQL : les colonnes `json` / `jsonb` sont lues en texte brut (un `JSON.parse` intermédiaire faussait les grands nombres).
+
 ## [0.7.0] — 2026-10-06
 
 ### Ajouté
