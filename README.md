@@ -90,6 +90,19 @@ npm run build      # vérification des types + bundle esbuild dans dist/
 npm run package    # produit db-explorer-lite-<version>.vsix
 ```
 
+### Tests
+
+```bash
+docker compose -f test/docker-compose.yml up -d --wait   # PostgreSQL 16 (port 55432) et MariaDB 11 (port 53306)
+npm test                                                 # unitaires + bout en bout sur les deux bases
+npm test pg                                              # une seule base : « pg » ou « my »
+```
+
+- `test/unit.test.js` : générateurs SQL (pagination, tri, filtre, UPDATE / INSERT / DELETE) et règles d'édition, sans base.
+- `test/e2e.js` : la vraie grille (jsdom) → panneau de résultats → pilote → vraie base : édition, insertion, suppression, transactions, pagination, tri, filtre, messages périmés ou forgés. Le jeu de données (`test/seed.js`) est recréé à chaque exécution : **n'utilisez que des bases jetables**.
+- Sans base joignable, les tests de bout en bout sont ignorés en local ; en CI (ou avec `DBX_REQUIRE_DB=1`) ils échouent. Les connexions se règlent par `TEST_PG_*` / `TEST_MYSQL_*` (voir `test/config.js`).
+- La CI exécute ces tests (avec des bases en service) avant de construire le `.vsix` ; une release n'est publiée que s'ils passent.
+
 ### Publier une version
 
 Un workflow GitHub Actions (`.github/workflows/release.yml`) construit l'extension à chaque push et pull request, et publie une **release avec le `.vsix`** lorsqu'un tag `v*` est poussé. Le tag doit correspondre à la version du `package.json` :

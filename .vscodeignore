@@ -5,3 +5,6 @@ tsconfig.json
 **/*.map
 **/*.ts
 package-lock.json
+test/**
+.test-build/**
+.github/**

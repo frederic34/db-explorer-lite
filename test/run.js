@@ -1,0 +1,22 @@
+// npm test : compile, tests unitaires, puis bout en bout sur chaque base joignable.
+const { spawnSync } = require('child_process');
+const path = require('path');
+const { build } = require('./build');
+
+build();
+const run = (args) => spawnSync(process.execPath, args, { stdio: 'inherit', cwd: path.join(__dirname, '..') });
+
+let failed = false;
+if (run(['--test', 'test/unit.test.js']).status !== 0) {
+  failed = true;
+}
+const only = process.argv[2]; // « pg » ou « my » pour n'en tester qu'une
+for (const kind of ['pg', 'my']) {
+  if (only && only !== kind) {
+    continue;
+  }
+  if (run(['test/e2e.js', kind]).status !== 0) {
+    failed = true;
+  }
+}
+process.exit(failed ? 1 : 0);
