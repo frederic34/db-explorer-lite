@@ -22,6 +22,10 @@ export interface ColumnInfo {
   type: string;
   nullable: boolean;
   primaryKey: boolean;
+  /** Valeur par défaut, auto-incrément ou identité : on peut omettre la colonne à l'insertion. */
+  hasDefault: boolean;
+  /** Valeur calculée par le serveur (colonne générée) : ni insertion ni modification possibles. */
+  generated: boolean;
 }
 
 export interface QueryResult {
@@ -58,6 +62,11 @@ export interface DbDriver {
    * pour chacune, le nombre de lignes affectées.
    */
   executeBatch(statements: WriteStatement[]): Promise<number[]>;
+  /**
+   * Insère une ligne. PostgreSQL : l'instruction doit se terminer par RETURNING * et la ligne
+   * insérée est renvoyée ; MySQL : l'identifiant auto-généré éventuel est renvoyé.
+   */
+  insertRow(sql: string, params: unknown[]): Promise<{ row?: (string | null)[]; insertId?: string }>;
   dispose(): Promise<void>;
 }
 

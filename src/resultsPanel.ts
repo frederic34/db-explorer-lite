@@ -1,6 +1,13 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import { buildDeletes, buildSelectRow, buildUpdate, EditPlan, planEditing } from './editing';
+import {
+  buildDeletes,
+  buildInsert,
+  buildSelectRow,
+  buildUpdate,
+  EditPlan,
+  planEditing,
+} from './editing';
 import { ColumnInfo, DbDriver, DbType, QueryResult } from './types';
 import { errorMessage } from './util';
 
@@ -24,6 +31,8 @@ interface EditInfo {
   table: string;
   pk: number[];
   editable: boolean[];
+  insertable: boolean[];
+  hasDefault: boolean[];
   nullable: boolean[];
 }
 
@@ -105,6 +114,8 @@ const CSS = `
     resize: vertical; overflow: hidden; display: block;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); }
+  td.editcell .flags { display: flex; flex-direction: column; gap: 1px; }
+  tr.inserting td.editcell textarea::placeholder { font-style: italic; }
   td.editcell label { display: flex; align-items: center; gap: 3px; white-space: nowrap;
                       color: var(--vscode-descriptionForeground); font-size: 0.85em; padding-top: 3px; }
   td.readonlycell { color: var(--vscode-descriptionForeground); }
@@ -150,6 +161,8 @@ const SCRIPT = String.raw`
   var editing = null;
   var busy = false;
   var deletedCount = 0;
+  var insertedCount = 0;
+  var inserting = null;
 
   if (!edit && data.readOnlyReason) {
     root.appendChild(el('div', 'muted top', 'Lecture seule : ' + data.readOnlyReason + '.'));
@@ -162,12 +175,17 @@ const SCRIPT = String.raw`
   var info = el('span', 'muted');
   var spacer = el('span', 'spacer');
   var delBtn = null;
-  if (edit) { delBtn = el('button', 'danger', 'Supprimer la sélection'); }
+  var addBtn = null;
+  if (edit) {
+    delBtn = el('button', 'danger', 'Supprimer la sélection');
+    addBtn = el('button', 'primary', 'Ajouter une ligne');
+  }
   var exportBtn = el('button', '', 'Exporter en CSV');
   exportBtn.addEventListener('click', function () { vscode.postMessage({ type: 'exportCsv', token: data.token }); });
   bar.appendChild(filter);
   bar.appendChild(info);
   bar.appendChild(spacer);
+  if (addBtn) { bar.appendChild(addBtn); }
   if (delBtn) { bar.appendChild(delBtn); }
   bar.appendChild(exportBtn);
   root.appendChild(bar);
@@ -242,6 +260,7 @@ const SCRIPT = String.raw`
     var vis = visibleRows();
     info.textContent = term ? vis.length + ' / ' + rows.length + ' lignes affichées' : '';
     if (edit) {
+      addBtn.disabled = busy;
       var n = selectedCount();
       delBtn.textContent = n > 0 ? 'Supprimer la sélection (' + n + ')' : 'Supprimer la sélection';
       delBtn.disabled = busy || n === 0;
@@ -250,7 +269,9 @@ const SCRIPT = String.raw`
       selectAll.indeterminate = !all && vis.some(function (r) { return selected[r.i]; });
       selectAll.disabled = busy || vis.length === 0;
     }
-    var extra = deletedCount > 0 ? ' · ' + plural(deletedCount, 'ligne supprimée', 'lignes supprimées') : '';
+    var extra = '';
+    if (insertedCount > 0) { extra += ' · ' + plural(insertedCount, 'ligne ajoutée', 'lignes ajoutées'); }
+    if (deletedCount > 0) { extra += ' · ' + plural(deletedCount, 'ligne supprimée', 'lignes supprimées'); }
     summary.textContent = ' · ' + data.summary + extra;
   }
 
@@ -266,6 +287,7 @@ const SCRIPT = String.raw`
     if (busy) { return; }
     var r = rows.filter(function (x) { return x.i === i; })[0];
     if (!r) { return; }
+    inserting = null;
     editing = { i: i, vals: {}, nul: {} };
     data.columns.forEach(function (_n, j) {
       editing.vals[j] = r.c[j] === null ? '' : r.c[j];
@@ -365,6 +387,131 @@ const SCRIPT = String.raw`
     return tr;
   }
 
+  // --- Insertion : une ligne de saisie en tête de grille. Par colonne, trois états :
+  //   default  = colonne omise (le serveur applique sa valeur par défaut / auto-incrément)
+  //   null     = NULL explicite
+  //   value    = valeur saisie
+  //   required = colonne obligatoire pas encore renseignée (bloque l'envoi)
+  function startInsert() {
+    if (busy) { return; }
+    editing = null;
+    inserting = { cols: {} };
+    data.columns.forEach(function (_n, j) {
+      var mode = edit.hasDefault[j] ? 'default' : (edit.nullable[j] ? 'null' : 'required');
+      inserting.cols[j] = { mode: mode, val: '' };
+    });
+    clearOp();
+    renderBody();
+    wrap.scrollTop = 0;
+    var first = tbody.querySelector('tr.inserting textarea');
+    if (first) { first.focus(); }
+  }
+  function cancelInsert() { inserting = null; renderBody(); }
+
+  function saveInsert() {
+    if (!inserting || busy) { return; }
+    var values = {};
+    for (var j = 0; j < data.columns.length; j++) {
+      if (!edit.insertable[j]) { continue; }
+      var c = inserting.cols[j];
+      if (c.mode === 'required') {
+        showOp('ko', 'La colonne « ' + data.columns[j] + ' » est obligatoire.');
+        var field = tbody.querySelector('tr.inserting td:nth-child(' + (j + 3) + ') textarea');
+        if (field) { field.focus(); }
+        return;
+      }
+      if (c.mode === 'value') { values[j] = c.val; }
+      else if (c.mode === 'null') { values[j] = null; }
+    }
+    showOp('busy', 'Insertion…');
+    vscode.postMessage({ type: 'insertRow', token: data.token, values: values });
+    setBusy(true);
+  }
+
+  function renderInsertRow() {
+    var tr = el('tr', 'editing inserting');
+    var ta = el('td', 'actions');
+    var ok = el('button', 'icon', '✓');
+    ok.title = 'Insérer la ligne (Entrée)';
+    ok.setAttribute('aria-label', 'Insérer la ligne');
+    ok.disabled = busy;
+    ok.addEventListener('click', saveInsert);
+    var ko = el('button', 'icon', '✗');
+    ko.title = 'Annuler (Échap)';
+    ko.setAttribute('aria-label', 'Annuler l’insertion');
+    ko.disabled = busy;
+    ko.addEventListener('click', cancelInsert);
+    ta.appendChild(ok);
+    ta.appendChild(ko);
+    tr.appendChild(ta);
+    tr.appendChild(el('td', 'rownum', '+'));
+    data.columns.forEach(function (_name, j) {
+      if (!edit.insertable[j]) {
+        var ro = el('td', 'readonlycell', '—');
+        ro.title = 'Valeur fournie par le serveur, ou type non pris en charge';
+        tr.appendChild(ro);
+        return;
+      }
+      var c = inserting.cols[j];
+      var td = el('td', 'editcell');
+      var box = el('div', 'cellbox');
+      var input = el('textarea');
+      input.rows = 1;
+      input.value = c.val;
+      input.spellcheck = false;
+      input.disabled = busy;
+      input.setAttribute('aria-label', data.columns[j]);
+      input.placeholder = edit.hasDefault[j] ? '(défaut)' : (edit.nullable[j] ? 'NULL' : '(obligatoire)');
+      var flags = el('div', 'flags');
+      var defBox = null;
+      var nulBox = null;
+      function mk(text, checked) {
+        var lab = el('label');
+        var cb = el('input');
+        cb.type = 'checkbox';
+        cb.checked = checked;
+        cb.disabled = busy;
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(text));
+        flags.appendChild(lab);
+        return cb;
+      }
+      if (edit.hasDefault[j]) { defBox = mk('défaut', c.mode === 'default'); }
+      if (edit.nullable[j]) { nulBox = mk('NULL', c.mode === 'null'); }
+      function sync() {
+        if (defBox) { defBox.checked = c.mode === 'default'; }
+        if (nulBox) { nulBox.checked = c.mode === 'null'; }
+      }
+      var grow = function () {
+        if (input.scrollHeight > 0) { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
+      };
+      input.addEventListener('input', function () { c.val = input.value; c.mode = 'value'; sync(); grow(); });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); cancelInsert(); }
+        else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveInsert(); }
+      });
+      if (defBox) {
+        defBox.addEventListener('change', function () {
+          if (defBox.checked) { c.mode = 'default'; c.val = ''; input.value = ''; }
+          else { c.mode = 'value'; input.focus(); }
+          sync();
+        });
+      }
+      if (nulBox) {
+        nulBox.addEventListener('change', function () {
+          if (nulBox.checked) { c.mode = 'null'; c.val = ''; input.value = ''; }
+          else { c.mode = edit.hasDefault[j] ? 'default' : 'value'; input.focus(); }
+          sync();
+        });
+      }
+      box.appendChild(input);
+      if (flags.childNodes.length) { box.appendChild(flags); }
+      td.appendChild(box);
+      tr.appendChild(td);
+    });
+    return tr;
+  }
+
   function renderRow(r, n) {
     if (editing && editing.i === r.i) { return renderEditRow(r, n); }
     var tr = document.createElement('tr');
@@ -403,6 +550,7 @@ const SCRIPT = String.raw`
   function renderBody() {
     var list = visibleRows();
     var frag = document.createDocumentFragment();
+    if (inserting) { frag.appendChild(renderInsertRow()); }
     for (var i = 0; i < list.length; i++) { frag.appendChild(renderRow(list[i], i + 1)); }
     tbody.replaceChildren(frag);
     updateBar();
@@ -420,6 +568,7 @@ const SCRIPT = String.raw`
   });
 
   if (edit) {
+    addBtn.addEventListener('click', startInsert);
     selectAll.addEventListener('change', function () {
       var on = selectAll.checked;
       visibleRows().forEach(function (r) { if (on) { selected[r.i] = true; } else { delete selected[r.i]; } });
@@ -455,6 +604,11 @@ const SCRIPT = String.raw`
       deletedCount += m.rowIndexes.length;
       if (editing && gone[editing.i]) { editing = null; }
       showOp('ok', plural(m.rowIndexes.length, 'ligne supprimée', 'lignes supprimées') + '.');
+    } else if (m.op === 'insert') {
+      if (m.row) { rows.unshift({ i: m.rowIndex, c: m.row }); }
+      insertedCount++;
+      inserting = null;
+      showOp('ok', m.message || 'Ligne ajoutée.');
     }
     renderBody();
   });
@@ -505,6 +659,8 @@ export class ResultsPanel {
           table: edit.table,
           pk: planned.plan.pk,
           editable: planned.plan.editable,
+          insertable: planned.plan.insertable,
+          hasDefault: planned.plan.hasDefault,
           nullable: planned.plan.nullable,
         };
       } else {
@@ -578,6 +734,85 @@ export class ResultsPanel {
       case 'deleteRows':
         await this.deleteRows(msg.rowIndexes);
         break;
+      case 'insertRow':
+        await this.insertRow(msg.values);
+        break;
+    }
+  }
+
+  private async insertRow(values: unknown): Promise<void> {
+    const fail = (message: string) => this.reply({ op: 'insert', ok: false, message });
+    const st = this.last;
+    if (!st?.spec || !st.plan) {
+      return fail("Insertion impossible : ce résultat n'est pas modifiable.");
+    }
+    if (typeof values !== 'object' || values === null) {
+      return fail('Valeurs invalides.');
+    }
+    const { spec, plan } = st;
+
+    const idx: number[] = [];
+    const vals: (string | null)[] = [];
+    for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+      const j = Number(key);
+      if (!Number.isInteger(j) || j < 0 || j >= st.columns.length || !plan.insertable[j]) {
+        return fail(`La colonne « ${st.columns[j] ?? key} » ne peut pas être renseignée.`);
+      }
+      if (value !== null && typeof value !== 'string') {
+        return fail('Valeur invalide.');
+      }
+      if (value === null && !plan.nullable[j]) {
+        return fail(`La colonne « ${st.columns[j]} » n'accepte pas NULL.`);
+      }
+      idx.push(j);
+      vals.push(value);
+    }
+
+    try {
+      const driver = await spec.getDriver();
+      const stmt = buildInsert(spec.dbType, spec.container, spec.table, st.columns, idx, vals);
+      const res = await driver.insertRow(stmt.sql, stmt.params);
+
+      // PostgreSQL renvoie la ligne (RETURNING). Sinon on la retrouve par sa clé primaire :
+      // soit fournie à l'insertion, soit générée (auto-incrément).
+      let row = res.row;
+      if (!row) {
+        const given = plan.pk.map((j) => {
+          const k = idx.indexOf(j);
+          return k >= 0 ? vals[k] : null;
+        });
+        let lookup: (string | null)[] | undefined;
+        if (given.every((v) => v !== null)) {
+          lookup = given;
+        } else if (plan.pk.length === 1 && res.insertId) {
+          lookup = [res.insertId];
+        }
+        if (lookup) {
+          try {
+            const sel = buildSelectRow(
+              spec.dbType,
+              spec.container,
+              spec.table,
+              plan.pk.map((j) => st.columns[j]),
+              lookup,
+            );
+            row = (await driver.query(sel.sql, sel.params)).rows[0];
+          } catch {
+            // L'insertion est faite ; la relecture est facultative.
+          }
+        }
+      }
+      if (!row) {
+        return this.reply({
+          op: 'insert',
+          ok: true,
+          message: "Ligne insérée. Actualisez l'aperçu pour la voir.",
+        });
+      }
+      st.rows.push(row);
+      this.reply({ op: 'insert', ok: true, rowIndex: st.rows.length - 1, row });
+    } catch (err) {
+      fail(errorMessage(err));
     }
   }
 
@@ -728,6 +963,7 @@ interface Message {
   rowIndex?: unknown;
   changes?: unknown;
   rowIndexes?: unknown;
+  values?: unknown;
 }
 
 function buildHtml(payload: Payload, nonce: string): string {

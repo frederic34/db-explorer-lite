@@ -41,6 +41,10 @@ export interface EditPlan {
   pk: number[];
   /** Par colonne : la valeur peut être modifiée. */
   editable: boolean[];
+  /** Par colonne : une valeur peut être fournie à l'insertion (clé primaire comprise). */
+  insertable: boolean[];
+  /** Par colonne : valeur par défaut / auto-incrément (la colonne peut être omise à l'insertion). */
+  hasDefault: boolean[];
   /** Par colonne : NULL autorisé. */
   nullable: boolean[];
 }
@@ -64,7 +68,11 @@ export function planEditing(
   return {
     plan: {
       pk,
-      editable: tableColumns.map((c) => !c.primaryKey && isEditableType(dbType, c.type)),
+      editable: tableColumns.map(
+        (c) => !c.primaryKey && !c.generated && isEditableType(dbType, c.type),
+      ),
+      insertable: tableColumns.map((c) => !c.generated && isEditableType(dbType, c.type)),
+      hasDefault: tableColumns.map((c) => c.hasDefault),
       nullable: tableColumns.map((c) => c.nullable),
     },
   };
@@ -94,6 +102,37 @@ export function buildUpdate(
     sql: `UPDATE ${qualified(dbType, container, table)} SET ${sets} WHERE ${where}`,
     params: [...setValues, ...pkValues],
     expect: 1,
+  };
+}
+
+/**
+ * INSERT d'une ligne. Seules les colonnes de `setIdx` sont renseignées, les autres prennent leur
+ * valeur par défaut. PostgreSQL : RETURNING * pour relire la ligne insérée.
+ */
+export function buildInsert(
+  dbType: DbType,
+  container: string,
+  table: string,
+  columns: string[],
+  setIdx: number[],
+  values: (string | null)[],
+): { sql: string; params: unknown[] } {
+  const target = qualified(dbType, container, table);
+  const returning = dbType === 'postgres' ? ' RETURNING *' : '';
+  if (setIdx.length === 0) {
+    return {
+      sql:
+        dbType === 'mysql'
+          ? `INSERT INTO ${target} () VALUES ()`
+          : `INSERT INTO ${target} DEFAULT VALUES${returning}`,
+      params: [],
+    };
+  }
+  const cols = setIdx.map((j) => quoteIdent(dbType, columns[j])).join(', ');
+  const marks = setIdx.map((_, k) => placeholder(dbType, k + 1)).join(', ');
+  return {
+    sql: `INSERT INTO ${target} (${cols}) VALUES (${marks})${returning}`,
+    params: values,
   };
 }
 

@@ -129,16 +129,34 @@ export class MySqlDriver implements DbDriver {
 
   async listColumns(container: string, table: string): Promise<ColumnInfo[]> {
     const { rows } = await this.run(
-      'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS ' +
+      'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS ' +
         'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
       [container, table],
     );
-    return (rows as unknown[][]).map((r) => ({
-      name: String(r[0]),
-      type: String(r[1]),
-      nullable: String(r[2]).toUpperCase() === 'YES',
-      primaryKey: String(r[3]).toUpperCase() === 'PRI',
-    }));
+    return (rows as unknown[][]).map((r) => {
+      const nullable = String(r[2]).toUpperCase() === 'YES';
+      const extra = String(r[5] ?? '');
+      const generated = /\b(VIRTUAL|STORED) GENERATED\b|\bPERSISTENT\b/i.test(extra);
+      // MariaDB renvoie la chaîne « NULL » pour DEFAULT NULL : ce n'est pas une vraie valeur par défaut.
+      const realDefault = r[4] !== null && !(nullable && String(r[4]).toUpperCase() === 'NULL');
+      return {
+        name: String(r[0]),
+        type: String(r[1]),
+        nullable,
+        primaryKey: String(r[3]).toUpperCase() === 'PRI',
+        hasDefault: realDefault || /auto_increment/i.test(extra) || generated,
+        generated,
+      };
+    });
+  }
+
+  async insertRow(sql: string, params: unknown[]): Promise<{ row?: (string | null)[]; insertId?: string }> {
+    const [res] = (await this.pool.query({ sql, values: params } as mysql.QueryOptions)) as unknown as [
+      { insertId?: number | string },
+      unknown,
+    ];
+    const id = res?.insertId;
+    return { insertId: id !== undefined && String(id) !== '0' ? String(id) : undefined };
   }
 
   async executeBatch(statements: WriteStatement[]): Promise<number[]> {
@@ -265,15 +283,27 @@ export class PostgresDriver implements DbDriver {
         '    ON k.constraint_name = tc.constraint_name AND k.table_schema = tc.table_schema AND k.table_name = tc.table_name ' +
         "  WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = c.table_schema " +
         '    AND tc.table_name = c.table_name AND k.column_name = c.column_name) AS is_pk ' +
+        ', c.column_default, c.is_identity, c.identity_generation, c.is_generated ' +
         'FROM information_schema.columns c WHERE c.table_schema = $1 AND c.table_name = $2 ORDER BY c.ordinal_position',
       [container, table],
     );
-    return rows.map((r) => ({
-      name: String(r[0]),
-      type: String(r[1]),
-      nullable: String(r[2]).toUpperCase() === 'YES',
-      primaryKey: r[3] === true,
-    }));
+    return rows.map((r) => {
+      const generated = r[7] === 'ALWAYS' || (r[5] === 'YES' && r[6] === 'ALWAYS');
+      return {
+        name: String(r[0]),
+        type: String(r[1]),
+        nullable: String(r[2]).toUpperCase() === 'YES',
+        primaryKey: r[3] === true,
+        hasDefault: r[4] !== null || r[5] === 'YES' || generated,
+        generated,
+      };
+    });
+  }
+
+  async insertRow(sql: string, params: unknown[]): Promise<{ row?: (string | null)[]; insertId?: string }> {
+    const res = await this.pool.query({ text: sql, values: params, rowMode: 'array' });
+    const first = res.rows[0] as unknown[] | undefined;
+    return { row: first ? first.map(formatCell) : undefined };
   }
 
   async executeBatch(statements: WriteStatement[]): Promise<number[]> {
