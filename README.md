@@ -25,7 +25,11 @@ Ou dans VS Code : `Extensions` → `…` → *Installer à partir d'un VSIX…*
 
 ## Utilisation
 
-1. Ouvrir la vue **DB Explorer** (icône base de données) → **Ajouter une connexion** et suivre l'assistant (type, hôte, port, utilisateur, mot de passe, base, SSL, nom). La connexion est testée avant l'enregistrement.
+1. Ouvrir la vue **DB Explorer** (icône base de données) → **Ajouter une connexion**. Un formulaire s'ouvre avec tous les champs (type, hôte, port, utilisateur, mot de passe, base, SSL, nom) :
+   - le **port** et l'**utilisateur** par défaut suivent le type choisi ;
+   - une **URL de connexion** (`mysql://user:mdp@hote:3306/base`, `postgresql://…`) peut être collée pour remplir les champs d'un coup ;
+   - le bouton **Tester la connexion** vérifie les paramètres avant d'enregistrer ;
+   - en modification, un mot de passe laissé vide conserve l'actuel.
 2. Déplier la connexion pour parcourir les tables.
 3. Cliquer sur l'icône d'aperçu d'une table, ou ouvrir une nouvelle requête et l'exécuter.
 

@@ -11,7 +11,7 @@ import {
   TableNode,
 } from './treeProvider';
 import { errorMessage, quoteIdent } from './util';
-import { promptConnection } from './wizard';
+import { openConnectionForm } from './connectionForm';
 
 let manager: ConnectionManager | undefined;
 
@@ -51,7 +51,7 @@ export function activate(context: vscode.ExtensionContext): void {
         'Ajouter une connexion',
       );
       if (choice) {
-        await addConnection();
+        addConnection();
       }
       return undefined;
     }
@@ -102,46 +102,18 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
-  /** Teste la connexion puis l'enregistre (avec confirmation si le test échoue). */
-  async function saveConnection(cfg: ConnectionConfig, password: string | undefined): Promise<void> {
-    const effective = password ?? (await mgr.getPassword(cfg.id)) ?? '';
-    try {
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Test de la connexion…' },
-        () => mgr.test(cfg, effective),
-      );
-    } catch (err) {
-      const save = 'Enregistrer quand même';
-      const choice = await vscode.window.showWarningMessage(
-        `Connexion impossible : ${errorMessage(err)}`,
-        { modal: true },
-        save,
-      );
-      if (choice !== save) {
-        return;
-      }
-    }
-    await mgr.save(cfg, password);
-  }
-
-  async function addConnection(): Promise<void> {
-    const input = await promptConnection();
-    if (input) {
-      await saveConnection(input.config, input.password);
-    }
+  /** Ouvre le formulaire de connexion (test et enregistrement s'y font). */
+  function addConnection(): void {
+    openConnectionForm(mgr);
   }
 
   // --- Commandes -----------------------------------------------------------------------
   context.subscriptions.push(
     vscode.commands.registerCommand('dbExplorer.addConnection', addConnection),
 
-    vscode.commands.registerCommand('dbExplorer.editConnection', async (node?: ConnectionNode) => {
-      if (!node) {
-        return;
-      }
-      const input = await promptConnection(node.config);
-      if (input) {
-        await saveConnection(input.config, input.password);
+    vscode.commands.registerCommand('dbExplorer.editConnection', (node?: ConnectionNode) => {
+      if (node) {
+        openConnectionForm(mgr, node.config);
       }
     }),
 
