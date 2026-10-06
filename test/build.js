@@ -14,6 +14,9 @@ exports.build = () =>
       sqlGuard: path.join(root, 'src/sqlGuard.ts'),
       completion: path.join(root, 'src/completion.ts'),
       history: path.join(root, 'src/history.ts'),
+      tunnel: path.join(root, 'src/tunnel.ts'),
+      form: path.join(root, 'src/connectionForm.ts'),
+      manager: path.join(root, 'src/connectionManager.ts'),
       schemaCache: path.join(root, 'src/schemaCache.ts'),
     },
     outdir: path.join(root, '.test-build'),
@@ -21,7 +24,7 @@ exports.build = () =>
     platform: 'node',
     format: 'cjs',
     target: 'node18',
-    external: ['pg-native'],
+    external: ['pg-native', 'cpu-features', '*.node'],
     alias: { vscode: path.join(__dirname, 'vscode-stub.js') },
     logLevel: 'error',
   });

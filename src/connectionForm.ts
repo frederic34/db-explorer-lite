@@ -1,7 +1,9 @@
 import { randomBytes, randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
-import { ConnectionConfig, DbType } from './types';
+import * as os from 'os';
+import * as path from 'path';
+import { ConnectionConfig, DbType, SshConfig } from './types';
 import { errorMessage } from './util';
 
 interface FormValues {
@@ -15,11 +17,19 @@ interface FormValues {
   ssl: boolean;
   readOnly: boolean;
   production: boolean;
+  sshOn: boolean;
+  sshHost: string;
+  sshPort: string;
+  sshUser: string;
+  sshAuth: 'password' | 'key' | 'agent';
+  /** Mot de passe SSH, ou phrase secrète de la clé. */
+  sshSecret: string;
+  sshKey: string;
 }
 
 interface InitData {
   editing: boolean;
-  values: Omit<FormValues, 'password'>;
+  values: Omit<FormValues, 'password' | 'sshSecret'>;
 }
 
 const openForms = new Map<string, vscode.WebviewPanel>();
@@ -56,6 +66,12 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
       ssl: existing?.ssl ?? false,
       readOnly: existing?.readOnly ?? false,
       production: existing?.production ?? false,
+      sshOn: existing?.ssh !== undefined,
+      sshHost: existing?.ssh?.host ?? '',
+      sshPort: String(existing?.ssh?.port ?? 22),
+      sshUser: existing?.ssh?.user ?? '',
+      sshAuth: existing?.ssh?.authMethod ?? 'password',
+      sshKey: existing?.ssh?.keyPath ?? '',
     },
   };
   panel.webview.html = buildHtml(init, randomBytes(16).toString('hex'));
@@ -75,6 +91,30 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
     if (v.type === 'postgres' && !v.database.trim()) {
       return { error: 'La base de données est obligatoire pour PostgreSQL.' };
     }
+    let ssh: SshConfig | undefined;
+    if (v.sshOn) {
+      const sshPort = Number(v.sshPort);
+      if (!v.sshHost.trim()) {
+        return { error: "L'hôte SSH est obligatoire." };
+      }
+      if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
+        return { error: 'Le port SSH doit être un entier entre 1 et 65535.' };
+      }
+      if (!v.sshUser.trim()) {
+        return { error: "L'utilisateur SSH est obligatoire." };
+      }
+      const authMethod = v.sshAuth === 'key' || v.sshAuth === 'agent' ? v.sshAuth : 'password';
+      if (authMethod === 'key' && !v.sshKey.trim()) {
+        return { error: 'Indiquez le fichier de clé privée SSH.' };
+      }
+      ssh = {
+        host: v.sshHost.trim(),
+        port: sshPort,
+        user: v.sshUser.trim(),
+        authMethod,
+        keyPath: authMethod === 'key' ? v.sshKey.trim() : undefined,
+      };
+    }
     const database = v.database.trim() || undefined;
     return {
       config: {
@@ -88,6 +128,7 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
         ssl: v.ssl === true,
         readOnly: v.readOnly === true || undefined,
         production: v.production === true || undefined,
+        ssh,
       },
     };
   };
@@ -95,10 +136,24 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
   /** Mot de passe saisi, ou conservé (modification avec champ vide). */
   const effectivePassword = async (v: FormValues): Promise<string> =>
     v.password === '' && existing ? ((await manager.getPassword(existing.id)) ?? '') : v.password;
+  const effectiveSshSecret = async (v: FormValues): Promise<string> =>
+    v.sshSecret === '' && existing ? ((await manager.getSshSecret(existing.id)) ?? '') : v.sshSecret;
 
   panel.webview.onDidReceiveMessage(async (msg: { type?: string; values?: FormValues }) => {
     if (msg?.type === 'cancel') {
       panel.dispose();
+      return;
+    }
+    if (msg?.type === 'pickKey') {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        title: 'Clé privée SSH',
+        openLabel: 'Choisir',
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), '.ssh')),
+      });
+      if (picked?.[0]) {
+        void panel.webview.postMessage({ type: 'keyPicked', path: picked[0].fsPath });
+      }
       return;
     }
     if (!msg?.values || (msg.type !== 'test' && msg.type !== 'save')) {
@@ -112,7 +167,7 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
 
     if (msg.type === 'test') {
       try {
-        await manager.test(checked.config, await effectivePassword(msg.values));
+        await manager.test(checked.config, await effectivePassword(msg.values), await effectiveSshSecret(msg.values));
         void panel.webview.postMessage({
           type: 'result',
           action: 'test',
@@ -133,7 +188,8 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
     try {
       // Modification avec mot de passe vide : on garde l'ancien (undefined = inchangé).
       const password = editing && msg.values.password === '' ? undefined : msg.values.password;
-      await manager.save(checked.config, password);
+      const sshSecret = editing && msg.values.sshSecret === '' ? undefined : msg.values.sshSecret;
+      await manager.save(checked.config, password, sshSecret);
       panel.dispose();
     } catch (err) {
       void panel.webview.postMessage({
@@ -193,6 +249,12 @@ const CSS = `
   button.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
   button:disabled { opacity: 0.55; cursor: default; }
   .spacer { flex: 1; }
+  [hidden] { display: none !important; }
+  select { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit;
+           background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+           border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); border-radius: 2px; }
+  #sshBox { margin-top: 10px; padding-left: 12px; border-left: 2px solid var(--vscode-panel-border); }
+  #sshBox .row, #sshBox > div { margin-bottom: 10px; }
   #status { margin-top: 14px; padding: 8px 12px; border-radius: 3px; display: none; white-space: pre-wrap;
             border-left: 3px solid; word-break: break-word; }
   #status.ok { display: block; border-color: var(--vscode-testing-iconPassed, #3fb950);
@@ -215,7 +277,8 @@ const SCRIPT = String.raw`
 
   var form = $('form'), status = $('status');
   var fields = { name: $('name'), host: $('host'), port: $('port'), user: $('user'),
-                 password: $('password'), database: $('database') };
+                 password: $('password'), database: $('database'),
+                 sshHost: $('sshHost'), sshPort: $('sshPort'), sshUser: $('sshUser'), sshKey: $('sshKey') };
 
   function currentType() { return form.elements['type'].value; }
 
@@ -226,6 +289,21 @@ const SCRIPT = String.raw`
   $('ssl').checked = !!v.ssl;
   $('readOnly').checked = !!v.readOnly;
   $('production').checked = !!v.production;
+  $('sshOn').checked = !!v.sshOn;
+  $('sshHost').value = v.sshHost; $('sshPort').value = v.sshPort; $('sshUser').value = v.sshUser;
+  $('sshAuth').value = v.sshAuth; $('sshKey').value = v.sshKey;
+  function applySsh() {
+    var on = $('sshOn').checked, auth = $('sshAuth').value;
+    $('sshBox').hidden = !on;
+    $('sshKeyRow').hidden = auth !== 'key';
+    $('sshPwRow').hidden = auth === 'agent';
+    $('sshSecretLabel').textContent = auth === 'key' ? 'Phrase secrète de la clé (si elle en a une)' : 'Mot de passe SSH';
+    clearStatus();
+  }
+  $('sshOn').addEventListener('change', applySsh);
+  $('sshAuth').addEventListener('change', applySsh);
+  $('pickKey').addEventListener('click', function () { vscode.postMessage({ type: 'pickKey' }); });
+  if (init.editing && v.sshOn) { $('sshSecret').placeholder = 'Laisser vide pour conserver le secret actuel'; }
   if (init.editing) {
     $('title').textContent = 'Modifier la connexion';
     fields.password.placeholder = 'Laisser vide pour conserver le mot de passe actuel';
@@ -256,6 +334,7 @@ const SCRIPT = String.raw`
   }
   Array.prototype.forEach.call(form.elements['type'], function (r) { r.addEventListener('change', applyType); });
   applyType();
+  applySsh();
 
   // --- Import depuis une URL de connexion ------------------------------------------------
   $('importBtn').addEventListener('click', function () {
@@ -316,6 +395,15 @@ const SCRIPT = String.raw`
       ['user', !fields.user.value.trim() ? "Le nom d'utilisateur est obligatoire." : ''],
       ['database', currentType() === 'postgres' && !fields.database.value.trim() ? 'Obligatoire pour PostgreSQL.' : '']
     ];
+    if ($('sshOn').checked) {
+      var sp = Number($('sshPort').value);
+      checks.push(['sshHost', !$('sshHost').value.trim() ? "L'hôte SSH est obligatoire." : '']);
+      checks.push(['sshPort', !($('sshPort').value.trim() !== '' && Number.isInteger(sp) && sp >= 1 && sp <= 65535) ? 'Port entre 1 et 65535.' : '']);
+      checks.push(['sshUser', !$('sshUser').value.trim() ? "L'utilisateur SSH est obligatoire." : '']);
+      checks.push(['sshKey', $('sshAuth').value === 'key' && !$('sshKey').value.trim() ? 'Indiquez le fichier de clé privée.' : '']);
+    } else {
+      ['sshHost', 'sshPort', 'sshUser', 'sshKey'].forEach(function (k) { checks.push([k, '']); });
+    }
     checks.forEach(function (c) { setErr(c[0], c[1]); if (c[1]) { errors.push(c[0]); } });
     if (focusFirst && errors.length) { fields[errors[0]].focus(); }
     return errors.length === 0;
@@ -329,7 +417,9 @@ const SCRIPT = String.raw`
     return {
       type: currentType(), name: fields.name.value, host: fields.host.value, port: fields.port.value,
       user: fields.user.value, password: fields.password.value, database: fields.database.value,
-      ssl: $('ssl').checked, readOnly: $('readOnly').checked, production: $('production').checked
+      ssl: $('ssl').checked, readOnly: $('readOnly').checked, production: $('production').checked,
+      sshOn: $('sshOn').checked, sshHost: $('sshHost').value, sshPort: $('sshPort').value, sshUser: $('sshUser').value,
+      sshAuth: $('sshAuth').value, sshSecret: $('sshSecret').value, sshKey: $('sshKey').value
     };
   }
   function setBusy(busy) { $('testBtn').disabled = busy; $('saveBtn').disabled = busy; }
@@ -353,6 +443,7 @@ const SCRIPT = String.raw`
 
   window.addEventListener('message', function (event) {
     var m = event.data;
+    if (m && m.type === 'keyPicked') { $('sshKey').value = m.path; return; }
     if (!m || m.type !== 'result') { return; }
     setBusy(false);
     show(m.ok ? 'ok' : 'ko', (m.ok ? '✓ ' : '✗ ') + m.message);
@@ -435,6 +526,53 @@ function buildHtml(init: InitData, nonce: string): string {
 
     <fieldset>
       <label class="check"><input type="checkbox" id="ssl"> Chiffrer la connexion (SSL/TLS)</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Tunnel SSH</legend>
+      <label class="check"><input type="checkbox" id="sshOn"> Se connecter à travers un tunnel SSH</label>
+      <div id="sshBox" hidden>
+        <div class="row">
+          <div>
+            <label class="field" for="sshHost">Hôte SSH</label>
+            <input type="text" id="sshHost" spellcheck="false" autocomplete="off">
+            <div class="err" id="err-sshHost" role="alert"></div>
+          </div>
+          <div class="narrow">
+            <label class="field" for="sshPort">Port</label>
+            <input type="number" id="sshPort" min="1" max="65535">
+            <div class="err" id="err-sshPort" role="alert"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label class="field" for="sshUser">Utilisateur SSH</label>
+            <input type="text" id="sshUser" spellcheck="false" autocomplete="off">
+            <div class="err" id="err-sshUser" role="alert"></div>
+          </div>
+          <div>
+            <label class="field" for="sshAuth">Authentification</label>
+            <select id="sshAuth">
+              <option value="password">Mot de passe</option>
+              <option value="key">Clé privée</option>
+              <option value="agent">Agent SSH</option>
+            </select>
+          </div>
+        </div>
+        <div id="sshKeyRow">
+          <label class="field" for="sshKey">Fichier de clé privée</label>
+          <div class="pwd">
+            <input type="text" id="sshKey" spellcheck="false" autocomplete="off" placeholder="~/.ssh/id_ed25519">
+            <button type="button" id="pickKey">Parcourir…</button>
+          </div>
+          <div class="err" id="err-sshKey" role="alert"></div>
+        </div>
+        <div id="sshPwRow">
+          <label class="field" id="sshSecretLabel" for="sshSecret">Mot de passe SSH</label>
+          <input type="password" id="sshSecret" autocomplete="new-password">
+        </div>
+        <div class="hint">Les champs « Hôte » et « Port » de la base ci-dessus sont ceux vus <em>depuis le serveur SSH</em> (souvent « localhost »). À la première connexion, l'empreinte du serveur SSH vous est demandée, puis elle est vérifiée à chaque fois. Mot de passe et phrase secrète sont stockés dans le SecretStorage.</div>
+      </div>
     </fieldset>
 
     <fieldset>

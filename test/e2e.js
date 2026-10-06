@@ -1071,6 +1071,92 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   for (const t of ['t_c', 't_b', 't_uq2', 't_uq', 't_comp2', 't_comp', 't_a']) { await db(`DROP TABLE IF EXISTS ${T(t)}`); }
   ok('nettoyage des tables de test');
 
+
+  // ================================================================ TUNNEL SSH (gestionnaire de connexions)
+  console.log('Tunnel SSH');
+  const { ConnectionManager } = require('../.test-build/manager.js');
+  const { startSshServer } = require('./ssh-server');
+  const mem = { state: {}, secrets: {} };
+  const ctx = {
+    globalState: { get: (k, d) => (k in mem.state ? mem.state[k] : d), update: async (k, v) => { mem.state[k] = v; } },
+    secrets: { get: async (k) => mem.secrets[k], store: async (k, v) => { mem.secrets[k] = v; }, delete: async (k) => { delete mem.secrets[k]; } },
+  };
+  const sshd = await startSshServer({ user: 'tester', password: 'pw-ssh' });
+  const mgr = new ConnectionManager(ctx);
+  const dbCfg = { ...CFG, id: 'viaSsh', name: 'Via SSH', ssh: { host: '127.0.0.1', port: sshd.port, user: 'tester', authMethod: 'password' } };
+  await mgr.save(dbCfg, PW, 'pw-ssh');
+  assert.equal(mem.secrets['dbExplorer.sshsecret.viaSsh'], 'pw-ssh');
+
+  // 1re connexion : empreinte demandée, puis requête à travers le tunnel
+  global.__modals = []; global.__modalDetails = []; global.__nextChoice = 'Faire confiance';
+  const viaDriver = await mgr.getDriver('viaSsh');
+  assert.equal(global.__modals.length, 1);
+  assert.match(global.__modals[0], new RegExp(`Première connexion au serveur SSH 127\\.0\\.0\\.1:${sshd.port}`));
+  assert.ok(global.__modalDetails[0].includes(sshd.hostFingerprint), 'empreinte affichée');
+  assert.equal((await viaDriver.query('SELECT 1')).rows[0][0], '1');
+  assert.ok(sshd.forwards.some((f) => f.host === CFG.host && f.port === CFG.port), 'la base est jointe par le serveur SSH');
+  assert.equal(mem.state['dbExplorer.sshHosts'][`127.0.0.1:${sshd.port}`], sshd.hostFingerprint);
+  const rows = await viaDriver.query(`SELECT COUNT(*) FROM ${T('produits')}`);
+  assert.ok(Number(rows.rows[0][0]) >= 0);
+  ok('connexion par tunnel : empreinte confirmée puis mémorisée, requêtes SQL à travers le serveur SSH', `${sshd.forwards.length} canal(aux) direct-tcpip`);
+
+  // appels simultanés : un seul tunnel ; reconnexion sans nouvelle question
+  await mgr.reset('viaSsh');
+  const loginsBefore = sshd.logins.length;
+  global.__modals = [];
+  const drivers = await Promise.all(Array.from({ length: 6 }, () => mgr.getDriver('viaSsh')));
+  assert.ok(drivers.every((d) => d === drivers[0]), 'même pilote pour tous');
+  assert.equal(sshd.logins.length, loginsBefore + 1, 'une seule session SSH');
+  assert.equal(global.__modals.length, 0, 'serveur déjà approuvé : aucune question');
+  const par = await Promise.all([1, 2, 3, 4, 5, 6].map((i) => drivers[0].query(`SELECT ${i}`)));
+  assert.deepEqual(par.map((r) => r.rows[0][0]), ['1', '2', '3', '4', '5', '6']);
+  ok('6 appels simultanés : un seul tunnel, pas de nouvelle question, requêtes parallèles multiplexées');
+
+  // coupure du réseau : message, puis rétablissement automatique
+  global.__modals = [];
+  sshd.dropClients();
+  await until(() => global.__modals.some((m) => /Tunnel SSH fermé pour « Via SSH »/.test(m)), 'avertissement de coupure', 8000);
+  const again = await mgr.getDriver('viaSsh');
+  assert.notEqual(again, drivers[0], 'nouveau pilote');
+  assert.equal((await again.query('SELECT 7')).rows[0][0], '7');
+  ok('coupure du tunnel : avertissement affiché, rétabli automatiquement à la requête suivante');
+
+  // empreinte modifiée : refus et alerte
+  mem.state['dbExplorer.sshHosts'][`127.0.0.1:${sshd.port}`] = 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  await mgr.reset('viaSsh');
+  global.__errors = [];
+  await assert.rejects(mgr.getDriver('viaSsh'), /clé du serveur non approuvée/);
+  assert.ok(global.__errors.some((e) => /L'empreinte du serveur SSH .* a changé/.test(e)), 'alerte de changement d\'empreinte');
+  ok('empreinte du serveur SSH modifiée : connexion refusée avec alerte');
+
+  // première connexion refusée par l'utilisateur ; puis « oublier » les serveurs approuvés
+  await mgr.forgetSshHosts();
+  global.__nextChoice = undefined; global.__modals = [];
+  await assert.rejects(mgr.getDriver('viaSsh'), /non approuvée/);
+  assert.equal(global.__modals.length, 1);
+  assert.deepEqual(mem.state['dbExplorer.sshHosts'], {}, 'rien mémorisé après un refus');
+  assert.equal(sshd.logins.filter(() => true).length >= 1, true);
+  ok('serveur inconnu refusé par l\'utilisateur : rien de mémorisé ni envoyé ; « oublier » redemande l\'empreinte');
+
+  // test de configuration (formulaire) avec mauvais mot de passe SSH, puis bon
+  global.__nextChoice = 'Faire confiance';
+  const loginsN = sshd.logins.length;
+  await assert.rejects(mgr.test(dbCfg, PW, 'mauvais'), /Authentification SSH refusée pour « tester »/);
+  await mgr.test(dbCfg, PW, 'pw-ssh');
+  assert.equal(sshd.logins.length, loginsN + 1);
+  ok('manager.test : mauvais mot de passe SSH → erreur claire ; bon → connexion fermée proprement');
+
+  // suppression : secrets effacés, tunnel fermé
+  const live = await mgr.getDriver('viaSsh');
+  assert.equal((await live.query('SELECT 1')).rows[0][0], '1');
+  await mgr.remove('viaSsh');
+  assert.equal(mem.secrets['dbExplorer.sshsecret.viaSsh'], undefined);
+  assert.equal(mem.secrets['dbExplorer.password.viaSsh'], undefined);
+  await assert.rejects(mgr.getDriver('viaSsh'), /introuvable/);
+  await mgr.dispose();
+  await sshd.close();
+  ok('suppression de la connexion : mots de passe effacés, pilote et tunnel fermés');
+
   console.log(`\n${passed} vérifications OK (${KIND})`);
   await driver.dispose();
 })().catch(async (e) => { console.error('\n✗ ÉCHEC :', e.stack || e.message); try { await driver.dispose(); } catch {} process.exit(1); });

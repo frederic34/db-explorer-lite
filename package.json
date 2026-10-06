@@ -112,6 +112,11 @@
         "title": "Annuler la requête en cours",
         "category": "DB Explorer",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "dbExplorer.forgetSshHosts",
+        "title": "Oublier les serveurs SSH approuvés",
+        "category": "DB Explorer"
       }
     ],
     "menus": {
@@ -267,20 +272,22 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p ./",
-    "build": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --sourcemap",
-    "build:prod": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --minify",
-    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --format=cjs --platform=node --target=node18 --sourcemap --watch",
+    "build": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap",
+    "build:prod": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --minify",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies --allow-missing-repository --skip-license",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js"
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js"
   },
   "dependencies": {
     "mysql2": "^3.11.0",
-    "pg": "^8.12.0"
+    "pg": "^8.12.0",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/pg": "^8.11.0",
+    "@types/ssh2": "^1.15.6",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.0",

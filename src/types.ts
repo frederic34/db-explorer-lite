@@ -2,6 +2,16 @@ import { CancelToken } from './util';
 
 export type DbType = 'mysql' | 'postgres';
 
+/** Tunnel SSH : la base est jointe à travers ce serveur (hôte et port de la base vus depuis lui). */
+export interface SshConfig {
+  host: string;
+  port: number;
+  user: string;
+  authMethod: 'password' | 'key' | 'agent';
+  /** Chemin de la clé privée (authMethod = key). */
+  keyPath?: string;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -16,6 +26,7 @@ export interface ConnectionConfig {
   readOnly?: boolean;
   /** Base de production : badge d'avertissement et confirmation avant toute écriture. */
   production?: boolean;
+  ssh?: SshConfig;
 }
 
 export interface TableInfo {

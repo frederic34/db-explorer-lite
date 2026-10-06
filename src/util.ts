@@ -20,6 +20,22 @@ export function quoteIdent(type: DbType, name: string): string {
 }
 
 /**
+ * Lance `fire` tout de suite puis toutes les 300 ms jusqu'à `isDone()`. L'annulation est répétée car
+ * la demande peut arriver juste avant que le serveur ne commence à exécuter la requête : une seule
+ * tentative serait alors sans effet.
+ */
+export function repeatUntilDone(fire: () => Promise<unknown>, isDone: () => boolean): void {
+  const once = () => {
+    if (!isDone()) {
+      void fire().catch(() => undefined);
+    }
+  };
+  once();
+  const timer = setInterval(() => (isDone() ? clearInterval(timer) : once()), 300);
+  timer.unref?.();
+}
+
+/**
  * Annulation d'une requête en cours : le pilote y attache l'action qui interrompt la requête
  * côté serveur (pg_cancel_backend, KILL QUERY). Demander l'annulation avant ou après le démarrage
  * est sans danger.

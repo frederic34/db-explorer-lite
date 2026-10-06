@@ -9,7 +9,7 @@ import {
   TableInfo,
   WriteStatement,
 } from './types';
-import { CancelToken } from './util';
+import { CancelToken, repeatUntilDone } from './util';
 
 function mismatch(actual: number, expected: number): Error {
   return new Error(
@@ -73,6 +73,7 @@ export class MySqlDriver implements DbDriver {
     private readonly cfg: ConnectionConfig,
     password: string,
     private readonly opts: DriverOptions,
+    tlsServername?: string,
   ) {
     this.pool = mysql.createPool({
       host: cfg.host,
@@ -80,7 +81,7 @@ export class MySqlDriver implements DbDriver {
       user: cfg.user,
       password,
       database: cfg.database || undefined,
-      ssl: cfg.ssl ? {} : undefined,
+      ssl: cfg.ssl ? ((tlsServername ? { servername: tlsServername } : {}) as mysql.SslOptions) : undefined,
       connectTimeout: 10000,
       connectionLimit: 3,
       // affectedRows = lignes trouvées (et non seulement modifiées) : un UPDATE qui réécrit
@@ -232,11 +233,7 @@ export class MySqlDriver implements DbDriver {
 
   /** Interrompt la requête en cours sur la connexion `threadId` (KILL QUERY, depuis une autre connexion). */
   private killer(threadId: number, isDone: () => boolean): () => Promise<void> {
-    return async () => {
-      if (!isDone()) {
-        await this.pool.query(`KILL QUERY ${Number(threadId)}`);
-      }
-    };
+    return async () => repeatUntilDone(() => this.pool.query(`KILL QUERY ${Number(threadId)}`), isDone)
   }
 
   async query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult> {
@@ -247,6 +244,10 @@ export class MySqlDriver implements DbDriver {
     }
     const conn = await this.pool.getConnection();
     let done = false;
+    if (cancel.requested) {
+      conn.release();
+      throw new Error('Requête annulée.');
+    }
     cancel.attach(this.killer(conn.threadId, () => done));
     try {
       const [rows, fields] = (await conn.query({ sql, values: params, rowsAsArray: true } as mysql.QueryOptions)) as unknown as [
@@ -265,6 +266,10 @@ export class MySqlDriver implements DbDriver {
     const t0 = Date.now();
     const conn = await this.pool.getConnection();
     let done = false;
+    if (cancel?.requested) {
+      conn.release();
+      throw new Error('Requête annulée.');
+    }
     cancel?.attach(this.killer(conn.threadId, () => done));
     let last: QueryResult | undefined;
     let index = 0;
@@ -316,6 +321,7 @@ export class PostgresDriver implements DbDriver {
     cfg: ConnectionConfig,
     password: string,
     private readonly opts: DriverOptions,
+    tlsServername?: string,
   ) {
     this.pool = new Pool({
       host: cfg.host,
@@ -323,7 +329,7 @@ export class PostgresDriver implements DbDriver {
       user: cfg.user,
       password,
       database: cfg.database || 'postgres',
-      ssl: cfg.ssl ? true : undefined,
+      ssl: cfg.ssl ? (tlsServername ? { servername: tlsServername } : true) : undefined,
       connectionTimeoutMillis: 10000,
       max: 3,
       options: cfg.readOnly ? '-c default_transaction_read_only=on' : undefined,
@@ -445,11 +451,13 @@ export class PostgresDriver implements DbDriver {
       const client = await this.pool.connect();
       const pid = (client as unknown as { processID: number }).processID;
       let done = false;
-      cancel.attach(async () => {
-        if (!done) {
-          await this.pool.query('SELECT pg_cancel_backend($1)', [pid]);
-        }
-      });
+      if (cancel.requested) {
+        client.release();
+        throw new Error('Requête annulée.');
+      }
+      cancel.attach(async () =>
+        repeatUntilDone(() => this.pool.query('SELECT pg_cancel_backend($1)', [pid]), () => done),
+      );
       try {
         raw = await client.query({ text: sql, values: params, rowMode: 'array' });
       } finally {
@@ -486,12 +494,17 @@ export class PostgresDriver implements DbDriver {
   }
 }
 
+/**
+ * `tlsServername` : nom d'hôte à vérifier dans le certificat quand on se connecte par un tunnel
+ * (l'adresse réellement jointe est alors 127.0.0.1).
+ */
 export function createDriver(
   cfg: ConnectionConfig,
   password: string,
   opts: DriverOptions,
+  tlsServername?: string,
 ): DbDriver {
   return cfg.type === 'mysql'
-    ? new MySqlDriver(cfg, password, opts)
-    : new PostgresDriver(cfg, password, opts);
+    ? new MySqlDriver(cfg, password, opts, tlsServername)
+    : new PostgresDriver(cfg, password, opts, tlsServername);
 }

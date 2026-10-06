@@ -10,14 +10,15 @@ export class ConnectionNode extends vscode.TreeItem {
     this.iconPath = config.production
       ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('charts.red'))
       : new vscode.ThemeIcon(config.readOnly ? 'lock' : 'server');
-    const flags = [config.production ? 'PROD' : '', config.readOnly ? 'lecture seule' : ''].filter(Boolean);
+    const flags = [config.production ? 'PROD' : '', config.readOnly ? 'lecture seule' : '', config.ssh ? 'SSH' : ''].filter(Boolean);
     this.description =
       `${config.type === 'mysql' ? 'MySQL' : 'PostgreSQL'} · ${config.host}:${config.port}` +
       (flags.length ? ` · ${flags.join(' · ')}` : '');
     this.tooltip =
       `${config.user}@${config.host}:${config.port}${config.database ? '/' + config.database : ''}` +
       (config.production ? '\nBase de production : confirmation avant écriture' : '') +
-      (config.readOnly ? '\nConnexion en lecture seule' : '');
+      (config.readOnly ? '\nConnexion en lecture seule' : '') +
+      (config.ssh ? `\nTunnel SSH : ${config.ssh.user}@${config.ssh.host}:${config.ssh.port}` : '');
   }
 }
 

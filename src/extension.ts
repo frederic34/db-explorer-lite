@@ -253,6 +253,18 @@ export function activate(context: vscode.ExtensionContext): void {
       tree.refresh();
     }),
 
+    vscode.commands.registerCommand('dbExplorer.forgetSshHosts', async () => {
+      const forget = 'Oublier';
+      const choice = await vscode.window.showWarningMessage(
+        "Oublier toutes les empreintes de serveurs SSH approuvées ? Elles seront redemandées à la prochaine connexion.",
+        { modal: true },
+        forget,
+      );
+      if (choice === forget) {
+        await mgr.forgetSshHosts();
+      }
+    }),
+
     vscode.commands.registerCommand('dbExplorer.cancelQuery', async () => {
       await Promise.all([...running].map((t) => t.cancel()));
     }),
