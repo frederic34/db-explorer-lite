@@ -42,6 +42,7 @@ async function preview(table, limit = 200, isView = false) {
 function mount(columns) {
   const p = global.__vsPanels[0];
   const dom = new JSDOM(p.html, { runScripts: 'dangerously', beforeParse(w) {
+    global.__vsWin = w;   // la page envoie « ready » pendant son chargement : les réponses doivent déjà lui parvenir
     w.acquireVsCodeApi = () => ({ postMessage: (m) => { p.handlers.forEach((h) => h(m)); } });
   } });
   global.__vsWin = dom.window;
@@ -928,6 +929,147 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
     assert.equal(await row('lignes', `${q('cmd')} = 60`), undefined, 'texte multi-instructions : tout ou rien');
     ok('PostgreSQL : plusieurs instructions dans un texte (dernier résultat), exécutées atomiquement');
   }
+
+
+  // ================================================================ CLÉS ÉTRANGÈRES
+  console.log('Navigation par clé étrangère');
+  const ct = await driver.listColumns(SCHEMA, 'enfants');
+  assert.deepEqual(ct.find((c) => c.name === 'produit_id').references, { container: SCHEMA, table: 'produits', column: 'id' });
+  assert.equal(ct.find((c) => c.name === 'id').references, undefined);
+  assert.equal((await driver.listColumns(SCHEMA, 'produits')).some((c) => c.references), false);
+  ok('listColumns : clé étrangère détectée (enfants.produit_id → produits.id)');
+
+  const idt = KIND === 'pg' ? 'int' : 'INT';
+  const eng = KIND === 'pg' ? '' : ' ENGINE=InnoDB';
+  for (const t of ['t_c', 't_b', 't_a', 't_comp', 't_uq']) { await db(`DROP TABLE IF EXISTS ${T(t)}`); }
+  await db(`CREATE TABLE ${T('t_a')} (id ${idt} PRIMARY KEY, nom VARCHAR(20))${eng}`);
+  await db(`CREATE TABLE ${T('t_b')} (id ${idt} PRIMARY KEY, a_id ${idt}, label VARCHAR(20), FOREIGN KEY (a_id) REFERENCES ${T('t_a')}(id))${eng}`);
+  await db(`CREATE TABLE ${T('t_c')} (id ${idt} PRIMARY KEY, b_id ${idt}, FOREIGN KEY (b_id) REFERENCES ${T('t_b')}(id))${eng}`);
+  await db(`INSERT INTO ${T('t_a')} VALUES (1, 'Premier'), (2, 'Second')`);
+  await db(`INSERT INTO ${T('t_b')} VALUES (10, 1, 'b10'), (11, 1, 'b11'), (12, 2, 'b12'), (13, NULL, 'orphelin')`);
+  await db(`INSERT INTO ${T('t_c')} VALUES (100, 10), (101, 12), (102, NULL)`);
+  // clé composite : non suivie ; clé vers une colonne UNIQUE non primaire : suivie
+  await db(`CREATE TABLE ${T('t_comp')} (x ${idt}, y ${idt}, PRIMARY KEY (x, y))${eng}`);
+  await db(`CREATE TABLE ${T('t_uq')} (id ${idt} PRIMARY KEY, code VARCHAR(10) NOT NULL UNIQUE)${eng}`);
+  await db(`CREATE TABLE ${T('t_uq2')} (id ${idt} PRIMARY KEY, code VARCHAR(10), FOREIGN KEY (code) REFERENCES ${T('t_uq')}(code))${eng}`.replace('t_uq2', 't_uq2'));
+  await db(`INSERT INTO ${T('t_uq')} VALUES (1, 'AAA'), (2, 'BBB')`);
+  await db(`INSERT INTO ${T('t_uq2')} VALUES (1, 'BBB')`);
+  await db(`CREATE TABLE ${T('t_comp2')} (id ${idt} PRIMARY KEY, x ${idt}, y ${idt}, FOREIGN KEY (x, y) REFERENCES ${T('t_comp')}(x, y))${eng}`);
+  assert.equal((await driver.listColumns(SCHEMA, 't_comp2')).some((c) => c.references), false);
+  assert.equal((await driver.listColumns(SCHEMA, 't_uq2')).find((c) => c.name === 'code').references.column, 'code');
+  ok('clé composite non suivie ; clé vers une colonne UNIQUE suivie');
+
+  const navTo = async (fn, columns) => {
+    const before = global.__vsPanels[0].html;
+    fn();
+    await until(() => global.__vsPanels[0].html !== before, 'navigation');
+    return mount(columns);
+  };
+  const fkSel = (pp) => [...pp.d.querySelectorAll('a.fkl')];
+  const nameOf = (pp) => pp.d.querySelector('.top').textContent;
+  const nbNav = () => global.__replies.filter((m) => m.type === 'pageError').length;
+  let fc = await preview('t_c');
+  assert.equal(fkSel(fc).length, 2, 'une cellule NULL n\'est pas un lien');
+  assert.deepEqual(fkSel(fc).map((a) => a.textContent), ['10', '12']);
+  assert.ok(fc.d.querySelectorAll('thead th')[3].textContent.startsWith('↗'));
+  assert.match(fc.d.querySelectorAll('thead th')[3].title, /Clé étrangère → t_b\.id/);
+  assert.equal(fc.d.querySelector('.bar ~ .bar, .bar') !== null, true);
+  ok('liens sur les valeurs de clé étrangère (NULL sans lien), en-tête marqué ↗');
+
+  // t_c(100).b_id = 10 → t_b filtré sur id = 10
+  const gB = await navTo(() => fkSel(fc)[0].click(), ['id', 'a_id', 'label']);
+  await until(() => gB.trs().length === 1, 'ligne liée');
+  assert.deepEqual(gB.ids(), ['10']);
+  const chip = gB.d.querySelector('.chip');
+  assert.ok(/id = 10/.test(chip.textContent), chip.textContent);
+  assert.ok(/← t_c/.test([...gB.d.querySelectorAll('.bar button')].map((b) => b.textContent).join('|')));
+  await until(() => /sur 1\b/.test(gB.d.querySelector('.pager .pos').textContent), 'total 1');
+  ok('clic sur un lien : table référencée ouverte, filtrée sur la valeur (puce « id = 10 », bouton « ← t_c »)', gB.d.querySelector('.pager .pos').textContent);
+
+  // 2e saut : t_b(10).a_id = 1 → t_a ; puis retour ×2
+  const link2 = [...gB.d.querySelectorAll('a.fkl')];
+  assert.deepEqual(link2.map((a) => a.textContent), ['1']);
+  const gA = await navTo(() => link2[0].click(), ['id', 'nom']);
+  await until(() => gA.trs().length === 1, 'ligne a');
+  assert.deepEqual(gA.ids(), ['1']);
+  assert.ok(/← t_b/.test([...gA.d.querySelectorAll('.bar button')].map((b) => b.textContent).join('|')));
+  const backBtn = (pp) => [...pp.d.querySelectorAll('.bar button')].find((b) => /^←/.test(b.textContent));
+  const gB2 = await navTo(() => backBtn(gA).click(), ['id', 'a_id', 'label']);
+  await until(() => gB2.trs().length === 1, 'retour t_b');
+  assert.ok(/id = 10/.test(gB2.d.querySelector('.chip').textContent), 'filtre d\'égalité retrouvé');
+  const gC = await navTo(() => backBtn(gB2).click(), ['id', 'b_id']);
+  await until(() => gC.trs().length === 3, 'retour t_c');
+  assert.equal(backBtn(gC), undefined, 'plus de retour au bout de la pile');
+  assert.equal(gC.d.querySelector('.chip'), null);
+  ok('deux sauts (t_c → t_b → t_a) puis deux retours : chaque vue retrouvée avec son filtre');
+
+  // retrait du filtre d'égalité : toute la table, le bouton retour reste
+  const gB3 = await navTo(() => fkSel(gC)[1].click(), ['id', 'a_id', 'label']);    // b_id = 12
+  await until(() => gB3.ids().join() === '12', 'b12');
+  gB3.d.querySelector('.chip button').click();
+  await until(() => gB3.trs().length === 4, 'toute la table');
+  await until(() => gB3.d.querySelector('.chip') === null, 'puce retirée');
+  assert.ok(backBtn(gB3), 'retour toujours possible');
+  await until(() => /sur 4\b/.test(gB3.d.querySelector('.pager .pos').textContent), 'total 4');
+  ok('retrait du filtre d\'égalité : table entière, total recompté, retour conservé');
+
+  // le filtre texte se combine à l'égalité ; édition possible dans la table atteinte
+  const gC2 = await preview('t_c');
+  const gB4 = await navTo(() => fkSel(gC2)[0].click(), ['id', 'a_id', 'label']);
+  await until(() => gB4.ids().join() === '10', 'b10 ligne');
+  const f4 = gB4.d.querySelector('input[type=search]');
+  gB4.type(f4, 'zzz');
+  await until(() => gB4.trs().length === 0, 'filtre ET égalité');
+  gB4.type(f4, 'b10');
+  await until(() => gB4.ids().join() === '10', 'filtre ET égalité (trouvé)');
+  const tr4 = (gB4.pencil(gB4.rowById(10)).click(), gB4.editing());
+  gB4.type(gB4.input(tr4, 'label'), 'b10-modifié');
+  gB4.save();
+  await waitOp(gB4, 'ok', 'update via fk');
+  assert.equal((await row('t_b', `${q('id')} = 10`))[2], 'b10-modifié');
+  assert.equal((await row('t_b', `${q('id')} = 11`))[2], 'b11', 'voisines intactes');
+  ok('filtre texte ET égalité combinés ; modification possible dans la table atteinte');
+
+  // clé vers colonne unique non primaire
+  const gU = await preview('t_uq2');
+  const gU2 = await navTo(() => fkSel(gU)[0].click(), ['id', 'code']);
+  await until(() => gU2.trs().length === 1, 'uq ligne');
+  assert.deepEqual(gU2.ids(), ['2']);
+  assert.ok(/code = BBB/.test(gU2.d.querySelector('.chip').textContent));
+  ok('clé étrangère vers une colonne UNIQUE : bonne ligne trouvée (code = BBB → id 2)');
+
+  // messages forgés : pas de navigation, pageError
+  const gF = await preview('t_c');
+  const tokF = JSON.parse(gF.d.getElementById('data').textContent).token;
+  const sendFk = async (m) => { const n = nbNav(); global.__vsPanels[0].handlers.forEach((h) => h({ type: 'followFk', token: tokF, ...m })); await until(() => nbNav() > n, 'pageError'); };
+  await sendFk({ rowIndex: 0, col: 0 });          // colonne sans clé étrangère
+  await sendFk({ rowIndex: 2, col: 1 });          // valeur NULL
+  await sendFk({ rowIndex: 99, col: 1 });         // ligne inexistante
+  await sendFk({ rowIndex: 0, col: 'x' });
+  await sendFk({ rowIndex: 0, col: 99 });
+  assert.equal(JSON.parse(global.__vsPanels[0].html.match(/<script id="data"[^>]*>([\s\S]*?)<\/script>/)[1]).browse.back, undefined, 'aucune navigation');
+  // retrait de filtre forgé
+  const nb2 = nbNav();
+  global.__vsPanels[0].handlers.forEach((h) => h({ type: 'browse', token: tokF, where: { column: 'id', value: '1' } }));
+  await until(() => nbNav() > nb2, 'where forgé');
+  ok('followFk / where forgés refusés (colonne sans FK, NULL, ligne ou colonne inexistante, filtre imposé)');
+
+  // pagination à l'intérieur d'un filtre d'égalité
+  await db(`DROP TABLE IF EXISTS ${T('t_big_c')}`);
+  await db(`CREATE TABLE ${T('t_big_c')} (id ${idt} PRIMARY KEY, a_id ${idt}, FOREIGN KEY (a_id) REFERENCES ${T('t_a')}(id))${eng}`);
+  for (let i = 1; i <= 30; i++) { await db(`INSERT INTO ${T('t_big_c')} VALUES (${i}, ${i % 2 === 0 ? 1 : 2})`); }
+  const gBig = await preview('t_big_c', 5);
+  assert.equal(gBig.trs().length, 5);
+  const gA2 = await navTo(() => fkSel(gBig)[0].click(), ['id', 'nom']);
+  await until(() => gA2.trs().length === 1, 'ligne t_a');
+  assert.ok(/id = 2/.test(gA2.d.querySelector('.chip').textContent), 'première ligne de t_big_c : a_id = 2 (impaire)');
+  assert.ok(/← t_big_c/.test([...gA2.d.querySelectorAll('.bar button')].map((b) => b.textContent).join('|')));
+  const gBack = await navTo(() => backBtn(gA2).click(), ['id', 'a_id']);
+  assert.equal(gBack.trs().length, 5);
+  assert.equal(gBack.d.querySelector('.pager .pos').textContent.startsWith('Lignes 1–5'), true);
+  await db(`DROP TABLE ${T('t_big_c')}`);
+  for (const t of ['t_c', 't_b', 't_uq2', 't_uq', 't_comp2', 't_comp', 't_a']) { await db(`DROP TABLE IF EXISTS ${T(t)}`); }
+  ok('nettoyage des tables de test');
 
   console.log(`\n${passed} vérifications OK (${KIND})`);
   await driver.dispose();

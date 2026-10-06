@@ -38,6 +38,18 @@ export interface TableSource extends EditSpec {
 }
 
 type SortState = { col: number; dir: 'asc' | 'desc' } | null;
+/** Égalité exacte sur une colonne (arrivée par une clé étrangère). */
+type WhereState = { col: number; value: string };
+
+/** Vue précédente d'un aperçu, pour le bouton « Retour » après un saut par clé étrangère. */
+interface NavFrame {
+  src: TableSource;
+  offset: number;
+  pageSize: number;
+  sort: SortState;
+  filter: string;
+  where?: WhereState;
+}
 
 /** État de navigation d'un aperçu : page, taille, tri et filtre sont gérés côté serveur. */
 interface BrowseState {
@@ -46,6 +58,7 @@ interface BrowseState {
   pageSize: number;
   sort: SortState;
   filter: string;
+  where?: WhereState;
   hasNext: boolean;
   /** Total des lignes pour le filtre courant : undefined = calcul en cours, null = indisponible. */
   total?: number | null;
@@ -62,6 +75,9 @@ interface BrowseInfo {
   sort: SortState;
   filter: string;
   isView: boolean;
+  where?: { column: string; value: string };
+  /** Table d'où l'on vient (bouton « Retour »). */
+  back?: string;
 }
 
 const MAX_PAGE_SIZE = 1000;
@@ -96,6 +112,8 @@ interface Payload {
   readOnlyReason?: string;
   browse?: BrowseInfo;
   badges?: string[];
+  /** Par colonne : table référencée si c'est une clé étrangère (lien cliquable). */
+  fks?: ({ container: string; table: string; column: string } | null)[];
 }
 
 interface State {
@@ -105,6 +123,8 @@ interface State {
   spec?: EditSpec;
   plan?: EditPlan;
   browse?: BrowseState;
+  /** Pile des vues précédentes (navigation par clé étrangère). */
+  nav?: NavFrame[];
 }
 
 const CSS = `
@@ -162,6 +182,10 @@ const CSS = `
   td.actions, th.actions { white-space: nowrap; padding: 2px 6px; width: 1%; }
   td.actions input { vertical-align: middle; margin: 0 4px 0 0; }
   td.pk { color: var(--vscode-descriptionForeground); }
+  a.fkl { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  a.fkl:hover { color: var(--vscode-textLink-activeForeground); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
+          border: 1px solid var(--vscode-focusBorder); }
   tbody tr:hover { background: var(--vscode-list-hoverBackground); }
   tbody tr.selected { background: var(--vscode-list-inactiveSelectionBackground); }
   tbody tr.editing { background: var(--vscode-list-inactiveSelectionBackground); outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
@@ -216,6 +240,7 @@ const SCRIPT = String.raw`
 
   var edit = data.edit || null;
   var server = !!data.browse;
+  var fks = data.fks || [];
   var rows = data.rows.map(function (c, i) { return { i: i, c: c }; });
   var sortCol = -1;
   var asc = true;
@@ -253,6 +278,32 @@ const SCRIPT = String.raw`
   if (delBtn) { bar.appendChild(delBtn); }
   bar.appendChild(exportBtn);
   root.appendChild(bar);
+
+  // Navigation par clé étrangère : retour à la table précédente, filtre d'égalité en cours.
+  var navBar = el('div', 'bar');
+  root.insertBefore(navBar, bar);
+  function renderNav() {
+    navBar.replaceChildren();
+    var b = data.browse;
+    if (!b || (!b.back && !b.where)) { navBar.style.display = 'none'; return; }
+    navBar.style.display = '';
+    if (b.back) {
+      var back = el('button', '', '← ' + b.back);
+      back.title = 'Revenir à la table précédente';
+      back.addEventListener('click', function () { vscode.postMessage({ type: 'back', token: data.token }); });
+      navBar.appendChild(back);
+    }
+    if (b.where) {
+      var chip = el('span', 'chip');
+      chip.appendChild(document.createTextNode(b.where.column + ' = ' + b.where.value));
+      var x = el('button', 'icon', '✕');
+      x.title = 'Retirer ce filtre (afficher toute la table)';
+      x.setAttribute('aria-label', 'Retirer le filtre ' + b.where.column);
+      x.addEventListener('click', function () { ask({ where: null }); });
+      chip.appendChild(x);
+      navBar.appendChild(chip);
+    }
+  }
 
   // --- Pagination côté serveur : la grille n'est qu'une fenêtre sur la table.
   var pagerBar = null, firstBtn, prevBtn, nextBtn, refreshBtn, sizeSel, pos;
@@ -375,7 +426,8 @@ const SCRIPT = String.raw`
 
   function updateHeaders() {
     ths.forEach(function (th, i) {
-      var key = edit && edit.pk.indexOf(i) !== -1 ? '🔑 ' : '';
+      var key = edit && edit.pk.indexOf(i) !== -1 ? '🔑 ' : (fks[i] ? '↗ ' : '');
+      if (fks[i]) { th.title = 'Clé étrangère → ' + fks[i].table + '.' + fks[i].column; }
       th.textContent = key + data.columns[i] + (sortCol === i ? (asc ? ' ▲' : ' ▼') : '');
     });
   }
@@ -645,6 +697,19 @@ const SCRIPT = String.raw`
     return tr;
   }
 
+  function fkLink(r, j) {
+    var a = el('a', 'fkl', r.c[j]);
+    a.href = '#';
+    a.title = 'Ouvrir ' + fks[j].table + ' où ' + fks[j].column + ' = ' + r.c[j];
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (busy) { return; }
+      vscode.postMessage({ type: 'followFk', token: data.token, rowIndex: r.i, col: j });
+      showOp('busy', 'Ouverture de ' + fks[j].table + '…');
+    });
+    return a;
+  }
+
   function renderRow(r, n) {
     if (editing && editing.i === r.i) { return renderEditRow(r, n); }
     var tr = document.createElement('tr');
@@ -673,7 +738,11 @@ const SCRIPT = String.raw`
     tr.appendChild(el('td', 'rownum', String(n)));
     for (var j = 0; j < r.c.length; j++) {
       var td = document.createElement('td');
-      cellText(td, r.c[j]);
+      if (server && fks[j] && r.c[j] !== null) {
+        td.appendChild(fkLink(r, j));
+      } else {
+        cellText(td, r.c[j]);
+      }
       if (edit && edit.pk.indexOf(j) !== -1 && r.c[j] !== null) { td.classList.add('pk'); }
       tr.appendChild(td);
     }
@@ -748,7 +817,7 @@ const SCRIPT = String.raw`
       selected = {}; editing = null; inserting = null; busy = false;
       deletedCount = 0; insertedCount = 0;
       if (document.activeElement !== filter) { filter.value = m.browse.filter; }
-      syncSort(); clearOp(); updateHeaders(); renderBody();
+      syncSort(); clearOp(); renderNav(); updateHeaders(); renderBody();
       wrap.scrollTop = 0;
       return;
     }
@@ -781,6 +850,7 @@ const SCRIPT = String.raw`
   });
 
   syncSort();
+  renderNav();
   updateHeaders();
   renderBody();
   vscode.postMessage({ type: 'ready', token: data.token });
@@ -831,13 +901,18 @@ export class ResultsPanel {
    * serveur (la page affichée n'est qu'une fenêtre sur la table) ; si la table a une clé primaire,
    * les lignes peuvent être ajoutées, modifiées et supprimées.
    */
-  async openTable(src: TableSource): Promise<void> {
+  async openTable(
+    src: TableSource,
+    opts: { where?: WhereState; nav?: NavFrame[]; init?: NavFrame } = {},
+  ): Promise<void> {
+    const init = opts.init;
     const b: BrowseState = {
       src,
-      offset: 0,
-      pageSize: this.clampPageSize(src.pageSize),
-      sort: null,
-      filter: '',
+      offset: init?.offset ?? 0,
+      pageSize: this.clampPageSize(init?.pageSize ?? src.pageSize),
+      sort: init?.sort ?? null,
+      filter: init?.filter ?? '',
+      where: init?.where ?? opts.where,
       hasNext: false,
       total: undefined,
       loadSeq: 0,
@@ -852,7 +927,12 @@ export class ResultsPanel {
     }
     b.hasNext = page.hasNext;
 
-    const state: State = { columns: page.columns, rows: page.rows.map((r) => [...r]), browse: b };
+    const state: State = {
+      columns: page.columns,
+      rows: page.rows.map((r) => [...r]),
+      browse: b,
+      nav: opts.nav ?? [],
+    };
     let editInfo: EditInfo | undefined;
     let readOnlyReason: string | undefined;
     if (src.readOnly) {
@@ -889,6 +969,7 @@ export class ResultsPanel {
       readOnlyReason,
       browse: this.browseInfo(b),
       badges: src.badges,
+      fks: page.columns.map((name) => src.tableColumns.find((c) => c.name === name)?.references ?? null),
     });
     this.startCount(b);
   }
@@ -912,6 +993,7 @@ export class ResultsPanel {
       offset: b.offset,
       sort: b.sort ? { column: src.tableColumns[b.sort.col].name, dir: b.sort.dir } : undefined,
       filter: b.filter,
+      where: b.where ? { column: src.tableColumns[b.where.col].name, value: b.where.value } : undefined,
     });
     const driver = await src.getDriver();
     const res = await driver.query(query.sql, query.params);
@@ -937,6 +1019,10 @@ export class ResultsPanel {
       sort: b.sort,
       filter: b.filter,
       isView: b.src.isView,
+      where: b.where
+        ? { column: b.src.tableColumns[b.where.col].name, value: b.where.value }
+        : undefined,
+      back: this.last?.nav?.length ? this.last.nav[this.last.nav.length - 1].src.table : undefined,
     };
   }
 
@@ -961,6 +1047,7 @@ export class ResultsPanel {
           pageSize: 1,
           offset: 0,
           filter,
+          where: b.where ? { column: src.tableColumns[b.where.col].name, value: b.where.value } : undefined,
         });
         const res = await (await src.getDriver()).query(query.sql, query.params);
         const n = Number(res.rows[0]?.[0]);
@@ -996,7 +1083,13 @@ export class ResultsPanel {
     }
     const failPage = (message: string) =>
       void this.panel?.webview.postMessage({ type: 'pageError', token: this.token, message });
-    const next = { offset: b.offset, pageSize: b.pageSize, sort: b.sort, filter: b.filter };
+    const next = {
+      offset: b.offset,
+      pageSize: b.pageSize,
+      sort: b.sort,
+      filter: b.filter,
+      where: b.where,
+    };
     let recount = msg.refresh === true;
 
     if (msg.pageSize !== undefined) {
@@ -1038,6 +1131,15 @@ export class ResultsPanel {
         recount = true;
       }
     }
+    if ('where' in msg) {
+      // Seul le retrait du filtre d'égalité vient de la page ; sa pose passe par followFk.
+      if (msg.where !== null) {
+        return failPage('Filtre invalide.');
+      }
+      next.where = undefined;
+      next.offset = 0;
+      recount = true;
+    }
     if (msg.page === 'next') {
       if (!b.hasNext) {
         return failPage("Il n'y a pas de page suivante.");
@@ -1078,6 +1180,71 @@ export class ResultsPanel {
       sql: page.sql,
       browse: this.browseInfo(b),
     });
+  }
+
+  /** Clic sur une valeur de clé étrangère : ouvre la table référencée, filtrée sur cette valeur. */
+  private async followFk(msg: Message): Promise<void> {
+    const st = this.last;
+    const b = st?.browse;
+    if (!st || !b) {
+      return;
+    }
+    const fail = (message: string) =>
+      void this.panel?.webview.postMessage({ type: 'pageError', token: this.token, message });
+    const col = msg.col;
+    const ref =
+      typeof col === 'number' && Number.isInteger(col) ? st.columns[col] && b.src.tableColumns.find((c) => c.name === st.columns[col])?.references : undefined;
+    const row = typeof msg.rowIndex === 'number' ? st.rows[msg.rowIndex] : undefined;
+    const value = row && typeof col === 'number' ? row[col] : undefined;
+    if (!ref || value === null || value === undefined) {
+      return fail("Cette valeur n'est pas une clé étrangère suivie.");
+    }
+    try {
+      const driver = await b.src.getDriver();
+      const [tables, cols] = await Promise.all([
+        driver.listTables(ref.container),
+        driver.listColumns(ref.container, ref.table),
+      ]);
+      if (this.last !== st) {
+        return; // la vue a changé pendant la lecture
+      }
+      const refCol = cols.findIndex((c) => c.name === ref.column);
+      if (refCol < 0) {
+        return fail(`Colonne « ${ref.column} » introuvable dans ${ref.table}.`);
+      }
+      const frame: NavFrame = {
+        src: b.src,
+        offset: b.offset,
+        pageSize: b.pageSize,
+        sort: b.sort,
+        filter: b.filter,
+        where: b.where,
+      };
+      const nav = [...(st.nav ?? []), frame].slice(-20);
+      await this.openTable(
+        {
+          ...b.src,
+          container: ref.container,
+          table: ref.table,
+          tableColumns: cols,
+          isView: tables.find((t) => t.name === ref.table)?.isView ?? false,
+        },
+        { where: { col: refCol, value }, nav },
+      );
+    } catch (err) {
+      fail(errorMessage(err));
+    }
+  }
+
+  /** Retour à la table d'où l'on est venu (page, tri et filtre retrouvés ; données relues). */
+  private async back(): Promise<void> {
+    const st = this.last;
+    const nav = st?.nav;
+    if (!st || !nav || nav.length === 0) {
+      return;
+    }
+    const frame = nav[nav.length - 1];
+    await this.openTable(frame.src, { init: frame, nav: nav.slice(0, -1) });
   }
 
   showError(connection: string, sql: string, message: string, badges?: string[]): void {
@@ -1136,6 +1303,12 @@ export class ResultsPanel {
       }
       case 'browse':
         await this.browse(msg);
+        break;
+      case 'followFk':
+        await this.followFk(msg);
+        break;
+      case 'back':
+        await this.back();
         break;
       case 'exportCsv':
         await this.exportCsv();
@@ -1412,6 +1585,8 @@ interface Message {
   sort?: unknown;
   filter?: unknown;
   refresh?: unknown;
+  where?: unknown;
+  col?: unknown;
 }
 
 function buildHtml(payload: Payload, nonce: string): string {

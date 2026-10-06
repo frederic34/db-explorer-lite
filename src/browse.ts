@@ -11,6 +11,8 @@ export interface BrowseQuery {
   offset: number;
   sort?: { column: string; dir: 'asc' | 'desc' };
   filter?: string;
+  /** Égalité exacte sur une colonne (navigation par clé étrangère) ; se combine au filtre par ET. */
+  where?: { column: string; value: string };
 }
 
 /** Caractère d'échappement des jokers LIKE (choisi pour ne dépendre ni de NO_BACKSLASH_ESCAPES ni du SGBD). */
@@ -24,23 +26,41 @@ export function likePattern(term: string): string {
 const target = (b: BrowseQuery): string =>
   `${quoteIdent(b.dbType, b.container)}.${quoteIdent(b.dbType, b.table)}`;
 
-/** Recherche du terme dans toutes les colonnes textuelles (conversion en texte, sans tenir compte de la casse). */
+/**
+ * Clause WHERE : égalité exacte (navigation) ET recherche du terme dans toutes les colonnes
+ * textuelles (conversion en texte, sans tenir compte de la casse).
+ */
 function whereClause(b: BrowseQuery): { sql: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const mark = (): string => (b.dbType === 'postgres' ? `$${params.length}` : '?');
+  const parts: string[] = [];
+
+  if (b.where) {
+    params.push(b.where.value);
+    parts.push(`${quoteIdent(b.dbType, b.where.column)} = ${mark()}`);
+  }
+
   const term = (b.filter ?? '').trim();
-  if (!term) {
-    return { sql: '', params: [] };
+  if (term) {
+    const cols = b.columns.filter((c) => !isBinaryLike(b.dbType, c.type));
+    if (cols.length === 0) {
+      parts.push('1 = 0');
+    } else {
+      const pattern = likePattern(term);
+      if (b.dbType === 'postgres') {
+        params.push(pattern);
+        const m = mark(); // un seul paramètre, réutilisé pour chaque colonne
+        parts.push('(' + cols.map((c) => `${quoteIdent('postgres', c.name)}::text ILIKE ${m} ESCAPE '${ESC}'`).join(' OR ') + ')');
+      } else {
+        const preds = cols.map((c) => {
+          params.push(pattern);
+          return `CAST(${quoteIdent('mysql', c.name)} AS CHAR) LIKE ? ESCAPE '${ESC}'`;
+        });
+        parts.push('(' + preds.join(' OR ') + ')');
+      }
+    }
   }
-  const cols = b.columns.filter((c) => !isBinaryLike(b.dbType, c.type));
-  if (cols.length === 0) {
-    return { sql: ' WHERE 1 = 0', params: [] };
-  }
-  const pattern = likePattern(term);
-  if (b.dbType === 'postgres') {
-    const preds = cols.map((c) => `${quoteIdent('postgres', c.name)}::text ILIKE $1 ESCAPE '${ESC}'`);
-    return { sql: ` WHERE ${preds.join(' OR ')}`, params: [pattern] };
-  }
-  const preds = cols.map((c) => `CAST(${quoteIdent('mysql', c.name)} AS CHAR) LIKE ? ESCAPE '${ESC}'`);
-  return { sql: ` WHERE ${preds.join(' OR ')}`, params: cols.map(() => pattern) };
+  return { sql: parts.length ? ` WHERE ${parts.join(' AND ')}` : '', params };
 }
 
 /**

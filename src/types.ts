@@ -32,6 +32,8 @@ export interface ColumnInfo {
   hasDefault: boolean;
   /** Valeur calculée par le serveur (colonne générée) : ni insertion ni modification possibles. */
   generated: boolean;
+  /** Clé étrangère sur une seule colonne : colonne référencée (les clés composites ne sont pas suivies). */
+  references?: { container: string; table: string; column: string };
 }
 
 export interface QueryResult {

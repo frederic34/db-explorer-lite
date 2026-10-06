@@ -44,14 +44,14 @@ test('sans clé primaire : pas d\'ORDER BY inventé', () => {
 
 test('filtre PostgreSQL : un seul paramètre, colonnes binaires exclues, échappement LIKE', () => {
   const q = buildPageQuery({ ...base, dbType: 'postgres', columns: cols, filter: '  a%b ' });
-  assert.match(q.sql, /WHERE "id"::text ILIKE \$1 ESCAPE '!' OR "nom"::text ILIKE \$1 ESCAPE '!' ORDER BY/);
+  assert.match(q.sql, /WHERE \("id"::text ILIKE \$1 ESCAPE '!' OR "nom"::text ILIKE \$1 ESCAPE '!'\) ORDER BY/);
   assert.ok(!q.sql.includes('"bin"'));
   assert.deepEqual(q.params, ['%a!%b%']);
 });
 
 test('filtre MySQL : un paramètre par colonne, colonnes binaires exclues', () => {
   const q = buildPageQuery({ ...base, dbType: 'mysql', columns: mysqlCols, filter: 'x' });
-  assert.match(q.sql, /WHERE CAST\(`id` AS CHAR\) LIKE \? ESCAPE '!' OR CAST\(`nom` AS CHAR\) LIKE \? ESCAPE '!'/);
+  assert.match(q.sql, /WHERE \(CAST\(`id` AS CHAR\) LIKE \? ESCAPE '!' OR CAST\(`nom` AS CHAR\) LIKE \? ESCAPE '!'\)/);
   assert.ok(!q.sql.includes('`bin`'));
   assert.deepEqual(q.params, ['%x%', '%x%']);
 });
@@ -413,4 +413,21 @@ test('cache du schéma : une seule lecture, rechargement après expiration ou in
   cache.invalidate('c1');
   assert.deepEqual(cache.view('c1', cfg).containers, []);
   assert.equal(cache.view('c1', cfg).columns('s', 't'), undefined);
+});
+
+test('navigation : égalité exacte seule, puis combinée au filtre (numérotation des paramètres)', () => {
+  const w = { column: 'id', value: '42' };
+  let q = buildPageQuery({ ...base, dbType: 'postgres', columns: cols, where: w });
+  assert.equal(q.sql, 'SELECT * FROM "shop"."t" WHERE "id" = $1 ORDER BY "id" LIMIT 101 OFFSET 0');
+  assert.deepEqual(q.params, ['42']);
+  q = buildPageQuery({ ...base, dbType: 'postgres', columns: cols, where: w, filter: 'x' });
+  assert.match(q.sql, /WHERE "id" = \$1 AND \("id"::text ILIKE \$2 ESCAPE '!' OR "nom"::text ILIKE \$2 ESCAPE '!'\)/);
+  assert.deepEqual(q.params, ['42', '%x%']);
+  q = buildPageQuery({ ...base, dbType: 'mysql', columns: mysqlCols, where: w, filter: 'x' });
+  assert.match(q.sql, /WHERE `id` = \? AND \(CAST\(`id` AS CHAR\) LIKE \? ESCAPE '!' OR CAST\(`nom` AS CHAR\) LIKE \? ESCAPE '!'\)/);
+  assert.deepEqual(q.params, ['42', '%x%', '%x%']);
+  const c = buildCountQuery({ ...base, dbType: 'postgres', columns: cols, where: w });
+  assert.equal(c.sql, 'SELECT COUNT(*) FROM "shop"."t" WHERE "id" = $1');
+  q = buildPageQuery({ ...base, dbType: 'postgres', columns: cols, where: { column: 'x"y', value: "1'; DROP" } });
+  assert.ok(q.sql.includes('"x""y" = $1') && !q.sql.includes('DROP'));
 });

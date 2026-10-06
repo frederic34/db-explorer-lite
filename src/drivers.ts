@@ -140,6 +140,23 @@ export class MySqlDriver implements DbDriver {
         'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
       [container, table],
     );
+    const refs = new Map<string, { container: string; table: string; column: string }>();
+    try {
+      // Clés étrangères sur une seule colonne (les clés composites ne sont pas suivies).
+      const fk = await this.run(
+        'SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME ' +
+          'FROM information_schema.KEY_COLUMN_USAGE k ' +
+          'WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ' +
+          'AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k2 WHERE k2.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA ' +
+          'AND k2.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND k2.TABLE_NAME = k.TABLE_NAME) = 1',
+        [container, table],
+      );
+      for (const r of fk.rows as unknown[][]) {
+        refs.set(String(r[0]), { container: String(r[1]), table: String(r[2]), column: String(r[3]) });
+      }
+    } catch {
+      // Droits insuffisants sur information_schema : on n'affiche simplement pas les liens.
+    }
     return (rows as unknown[][]).map((r) => {
       const nullable = String(r[2]).toUpperCase() === 'YES';
       const extra = String(r[5] ?? '');
@@ -153,6 +170,7 @@ export class MySqlDriver implements DbDriver {
         primaryKey: String(r[3]).toUpperCase() === 'PRI',
         hasDefault: realDefault || /auto_increment/i.test(extra) || generated,
         generated,
+        references: refs.get(String(r[0])),
       };
     });
   }
@@ -357,6 +375,23 @@ export class PostgresDriver implements DbDriver {
         'FROM information_schema.columns c WHERE c.table_schema = $1 AND c.table_name = $2 ORDER BY c.ordinal_position',
       [container, table],
     );
+    const refs = new Map<string, { container: string; table: string; column: string }>();
+    try {
+      const fk = await this.rows(
+        'SELECT a.attname, nf.nspname, cf.relname, af.attname FROM pg_constraint con ' +
+          'JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+          'JOIN pg_class cf ON cf.oid = con.confrelid JOIN pg_namespace nf ON nf.oid = cf.relnamespace ' +
+          'JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1] ' +
+          'JOIN pg_attribute af ON af.attrelid = con.confrelid AND af.attnum = con.confkey[1] ' +
+          "WHERE con.contype = 'f' AND array_length(con.conkey, 1) = 1 AND n.nspname = $1 AND c.relname = $2",
+        [container, table],
+      );
+      for (const r of fk) {
+        refs.set(String(r[0]), { container: String(r[1]), table: String(r[2]), column: String(r[3]) });
+      }
+    } catch {
+      // Droits insuffisants : pas de liens.
+    }
     return rows.map((r) => {
       const generated = r[7] === 'ALWAYS' || (r[5] === 'YES' && r[6] === 'ALWAYS');
       return {
@@ -366,6 +401,7 @@ export class PostgresDriver implements DbDriver {
         primaryKey: r[3] === true,
         hasDefault: r[4] !== null || r[5] === 'YES' || generated,
         generated,
+        references: refs.get(String(r[0])),
       };
     });
   }
