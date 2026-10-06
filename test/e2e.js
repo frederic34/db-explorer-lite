@@ -172,6 +172,56 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.equal(r[c('note')], '');
   ok("valeur '' enregistrée comme chaîne vide (et non NULL)");
 
+  // éditeurs adaptés : JSON (indenté, validé) et dates (sélecteur natif)
+  console.log('Éditeurs JSON et dates');
+  await db(`DROP TABLE IF EXISTS ${T('evt')}`);
+  await db(`CREATE TABLE ${T('evt')} (id int PRIMARY KEY, j ${KIND === 'pg' ? 'jsonb' : 'json'}, d date, t time, ts ${KIND === 'pg' ? 'timestamp' : 'datetime'})`);
+  await db(`INSERT INTO ${T('evt')} VALUES (1, '{"a":[1,2],"b":{"c":true}}', '2026-01-02', '08:30:00', '2026-01-02 08:30:15')`);
+  const ev = await preview('evt');
+  let et = (ev.pencil(ev.rowById(1)).click(), ev.editing());
+  const hasJsonEditor = KIND === 'pg';   // MariaDB déclare JSON comme LONGTEXT : traité comme du texte
+  const pick = (name) => ev.cell(et, name).querySelector('input.picker');
+  assert.equal(pick('d').type, 'date'); assert.equal(pick('d').value, '2026-01-02');
+  assert.equal(pick('t').type, 'time'); assert.match(pick('t').value, /^08:30:00(\.000)?$/);
+  assert.equal(pick('ts').type, 'datetime-local'); assert.match(pick('ts').value, /^2026-01-02T08:30:15(\.000)?$/);
+  assert.equal(pick('j'), null);
+  ok('colonnes date / heure / datetime : sélecteur natif prérempli');
+  if (hasJsonEditor) {
+    assert.ok(ev.input(et, 'j').value.includes('\n'), 'JSON affiché indenté');
+    assert.ok(ev.cell(et, 'j').querySelector('button.icon'));
+    // seulement mis en forme : aucune requête
+    const n0 = nrep(); ev.save(); await tick(60);
+    assert.equal(ev.editing(), null); assert.equal(nrep(), n0);
+    ok('JSON ouvert indenté puis validé sans changement : aucune requête');
+    et = (ev.pencil(ev.rowById(1)).click(), ev.editing());
+    ev.type(ev.input(et, 'j'), '{"a": [1,');
+    assert.ok(ev.input(et, 'j').classList.contains('invalid'));
+    const n1 = nrep(); ev.save(); await tick(60);
+    assert.equal(ev.op().cls, 'ko'); assert.match(ev.op().text, /JSON invalide pour « j »/);
+    assert.ok(ev.editing() && nrep() === n1, 'envoi bloqué, édition conservée');
+    ok('JSON invalide : bloqué côté page, message clair, rien d\'envoyé');
+    ev.type(ev.input(et, 'j'), '{"a": 2, "big": 12345678901234567890}');
+  }
+  // sélecteur de date → texte ; « maintenant »
+  pick('d').value = '2027-03-04'; pick('d').dispatchEvent(new ev.w.Event('change', { bubbles: true }));
+  assert.equal(ev.input(et, 'd').value, '2027-03-04');
+  pick('ts').value = '2027-03-04T05:06'; pick('ts').dispatchEvent(new ev.w.Event('change', { bubbles: true }));
+  assert.equal(ev.input(et, 'ts').value, '2027-03-04 05:06:00', 'secondes complétées');
+  ev.cell(et, 't').querySelector('button.icon').click();
+  assert.match(ev.input(et, 't').value, /^[0-9]{2}:[0-9]{2}:[0-9]{2}$/);
+  ev.type(ev.input(et, 't'), '09:15:00');
+  assert.match(pick('t').value, /^09:15:00(\.000)?$/, 'le sélecteur suit la saisie');
+  ev.save();
+  await waitOp(ev, 'ok', 'update evt');
+  const er = await row('evt', 'id = 1');
+  assert.equal(String(er[2]).slice(0, 10), '2027-03-04');
+  assert.ok(String(er[4]).startsWith('2027-03-04 05:06:00'));
+  assert.ok(String(er[3]).startsWith('09:15:00'));
+  if (hasJsonEditor) { assert.ok(String(er[1]).includes('12345678901234567890'), 'grands nombres JSON intacts'); }
+  ok('sélecteurs et JSON enregistrés en base', hasJsonEditor ? 'grand nombre JSON préservé' : '');
+  await db(`DROP TABLE ${T('evt')}`);
+  pg = await preview('produits');   // la fenêtre de résultats est partagée : on revient à l'aperçu précédent
+
   // aucune modification : pas d'aller-retour
   const before = nrep();
   tr = (pg.pencil(pg.rowById(4)).click(), pg.editing());

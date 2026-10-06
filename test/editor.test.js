@@ -72,3 +72,22 @@ test('planToResult : arbre PostgreSQL, SQLite, texte MySQL', () => {
   const tab = { columns: ['id', 'type'], rows: [['1', 'ALL']], rowCount: 1, truncated: false, durationMs: 1 };
   assert.equal(planToResult('mysql', tab, false), tab, 'tableau MySQL classique inchangé');
 });
+
+test('editorKind : JSON, date, heure, datetime ; fuseaux horaires et autres types en texte libre', () => {
+  const { editorKind } = require('../.test-build/editing.js');
+  const k = (db, t) => editorKind(db, t);
+  assert.equal(k('postgres', 'jsonb'), 'json');
+  assert.equal(k('mysql', 'json'), 'json');
+  assert.equal(k('sqlite', 'JSON'), '');
+  assert.equal(k('postgres', 'date'), 'date');
+  assert.equal(k('mysql', 'datetime(6)'), 'datetime');
+  assert.equal(k('mysql', 'timestamp'), 'datetime');
+  assert.equal(k('postgres', 'timestamp(3) without time zone'), 'datetime');
+  assert.equal(k('postgres', 'timestamp with time zone'), '');
+  assert.equal(k('postgres', 'timestamptz'), '');
+  assert.equal(k('postgres', 'time without time zone'), 'time');
+  assert.equal(k('postgres', 'time with time zone'), '');
+  assert.equal(k('mysql', 'time(3)'), 'time');
+  assert.equal(k('postgres', 'text'), '');
+  assert.equal(k('mysql', 'varchar(20)'), '');
+});

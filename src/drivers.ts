@@ -443,8 +443,8 @@ export class MySqlDriver implements DbDriver {
 // PostgreSQL
 // ---------------------------------------------------------------------------
 
-/** date, time, timestamp, timestamptz, interval, timetz : on garde le texte renvoyé par le serveur. */
-const PG_RAW_TEXT_OIDS = new Set([1082, 1083, 1114, 1184, 1186, 1266]);
+/** date, time, timestamp, timestamptz, interval, timetz, json, jsonb : on garde le texte renvoyé par le serveur (un JSON.parse perdrait la précision des grands nombres). */
+const PG_RAW_TEXT_OIDS = new Set([1082, 1083, 1114, 1184, 1186, 1266, 114, 3802]);
 
 export class PostgresDriver implements DbDriver {
   readonly type = 'postgres' as const;

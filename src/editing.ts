@@ -59,6 +59,34 @@ export interface EditPlan {
   hasDefault: boolean[];
   /** Par colonne : NULL autorisé. */
   nullable: boolean[];
+  /** Par colonne : type d'éditeur adapté (json, date, datetime, time) ou '' pour du texte libre. */
+  kinds: EditorKind[];
+}
+
+export type EditorKind = '' | 'json' | 'date' | 'datetime' | 'time';
+
+/**
+ * Éditeur adapté au type de la colonne. Les types avec fuseau horaire restent en texte libre : un
+ * sélecteur de date locale ne peut pas porter le décalage.
+ */
+export function editorKind(dbType: DbType, columnType: string): EditorKind {
+  const t = columnType.trim().toLowerCase().replace(/\(\d+\)/g, '').replace(/\s+/g, ' ');
+  if (/with time zone|timetz|timestamptz/.test(t) && !/without time zone/.test(t)) {
+    return '';
+  }
+  if (t === 'json' || t === 'jsonb') {
+    return dbType === 'sqlite' ? '' : 'json';
+  }
+  if (t === 'date') {
+    return 'date';
+  }
+  if (t === 'datetime' || t === 'timestamp' || t === 'timestamp without time zone') {
+    return 'datetime';
+  }
+  if (t === 'time' || t === 'time without time zone') {
+    return 'time';
+  }
+  return '';
 }
 
 /** Détermine si un résultat peut être édité, ligne par ligne, via la clé primaire de la table. */
@@ -86,6 +114,7 @@ export function planEditing(
       insertable: tableColumns.map((c) => !c.generated && isEditableType(dbType, c.type)),
       hasDefault: tableColumns.map((c) => c.hasDefault),
       nullable: tableColumns.map((c) => c.nullable),
+      kinds: tableColumns.map((c) => editorKind(dbType, c.type)),
     },
   };
 }

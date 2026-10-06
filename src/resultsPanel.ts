@@ -103,6 +103,7 @@ interface EditInfo {
   insertable: boolean[];
   hasDefault: boolean[];
   nullable: boolean[];
+  kinds: string[];
 }
 
 interface Payload {
@@ -213,6 +214,11 @@ const CSS = `
   td.editcell textarea {
     min-width: 140px; width: 100%; box-sizing: border-box; font: inherit; padding: 2px 4px;
     resize: vertical; overflow: hidden; display: block;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); }
+  td.editcell textarea.mono { font-family: var(--vscode-editor-font-family, monospace); }
+  td.editcell textarea.invalid { border-color: var(--vscode-inputValidation-errorBorder, #be1100); }
+  td.editcell input.picker { box-sizing: border-box; font: inherit; padding: 1px 3px; width: 12.5em;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); }
   td.editcell .flags { display: flex; flex-direction: column; gap: 1px; }
@@ -512,6 +518,87 @@ const SCRIPT = String.raw`
 
   function setBusy(b) { busy = b; renderBody(); }
 
+  // --- Éditeurs adaptés au type : JSON (indentation, validation) et dates / heures (sélecteur natif, « maintenant »).
+  function kindOf(j) { return (edit.kinds && edit.kinds[j]) || ''; }
+  var FMT = {
+    date: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
+    datetime: '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?$',
+    time: '^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$'
+  };
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function nowText(kind) {
+    var d = new Date();
+    var ymd = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    var hms = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    return kind === 'date' ? ymd : (kind === 'time' ? hms : ymd + ' ' + hms);
+  }
+  function jsonProblem(text) {
+    try { JSON.parse(text); return ''; } catch (e) { return String(e.message || e); }
+  }
+  function sameJson(a, b) {
+    try { return JSON.stringify(JSON.parse(a)) === JSON.stringify(JSON.parse(b)); } catch (e) { return false; }
+  }
+  function decorate(box, input, j) {
+    var kind = kindOf(j);
+    if (!kind) { return; }
+    var fire = function () { input.dispatchEvent(new Event('input', { bubbles: true })); };
+    if (kind === 'json') {
+      input.classList.add('mono');
+      var fmt = el('button', 'icon', '{ }');
+      fmt.type = 'button';
+      fmt.title = 'Mettre en forme (indenter) le JSON';
+      fmt.setAttribute('aria-label', 'Mettre en forme le JSON');
+      fmt.disabled = busy;
+      var check = function () {
+        var t = input.value.trim();
+        var p = t === '' ? '' : jsonProblem(t);
+        input.classList.toggle('invalid', p !== '');
+        input.title = p ? 'JSON invalide : ' + p : 'Ctrl+Entrée pour enregistrer';
+      };
+      input.addEventListener('input', check);
+      fmt.addEventListener('click', function () {
+        try { input.value = JSON.stringify(JSON.parse(input.value), null, 2); } catch (e) { check(); return; }
+        fire();
+      });
+      box.appendChild(fmt);
+      setTimeout(check, 0);
+      return;
+    }
+    var re = new RegExp(FMT[kind]);
+    var pick = el('input', 'picker');
+    pick.type = kind === 'date' ? 'date' : (kind === 'time' ? 'time' : 'datetime-local');
+    if (kind !== 'date') { pick.step = '1'; }
+    pick.disabled = busy;
+    pick.setAttribute('aria-label', data.columns[j] + ' (sélecteur)');
+    var sync = function () {
+      var t = input.value.trim();
+      pick.value = re.test(t) ? (kind === 'datetime' ? t.replace(' ', 'T') : t) : '';
+    };
+    sync();
+    input.addEventListener('input', sync);
+    pick.addEventListener('change', function () {
+      if (!pick.value) { return; }
+      var v = kind === 'datetime' ? pick.value.replace('T', ' ') : pick.value;
+      if (v.indexOf('.') !== -1) { v = v.split('.')[0]; }
+      if (kind !== 'date' && v.length === (kind === 'time' ? 5 : 16)) { v += ':00'; }
+      input.value = v;
+      fire();
+    });
+    var now = el('button', 'icon', '⏱');
+    now.type = 'button';
+    now.title = 'Maintenant';
+    now.setAttribute('aria-label', 'Mettre la date et l’heure actuelles');
+    now.disabled = busy;
+    now.addEventListener('click', function () { input.value = nowText(kind); fire(); });
+    box.appendChild(pick);
+    box.appendChild(now);
+  }
+  function enterSaves(j, e) {
+    // JSON multiligne : Entrée insère une ligne, Ctrl/Cmd+Entrée enregistre.
+    return e.key === 'Enter' && !e.shiftKey && (kindOf(j) !== 'json' || e.ctrlKey || e.metaKey);
+  }
+
+
   function startEdit(i) {
     if (busy) { return; }
     var r = rows.filter(function (x) { return x.i === i; })[0];
@@ -521,6 +608,9 @@ const SCRIPT = String.raw`
     data.columns.forEach(function (_n, j) {
       editing.vals[j] = r.c[j] === null ? '' : r.c[j];
       editing.nul[j] = r.c[j] === null;
+      if (kindOf(j) === 'json' && r.c[j] !== null && edit.editable[j]) {
+        try { editing.vals[j] = JSON.stringify(JSON.parse(r.c[j]), null, 2); } catch (e) { /* laissé tel quel */ }
+      }
     });
     clearOp();
     renderBody();
@@ -534,11 +624,18 @@ const SCRIPT = String.raw`
     var r = rows.filter(function (x) { return x.i === editing.i; })[0];
     var changes = {};
     var count = 0;
+    var bad = '';
     data.columns.forEach(function (_n, j) {
       if (!edit.editable[j]) { return; }
       var v = editing.nul[j] ? null : editing.vals[j];
+      if (v !== null && kindOf(j) === 'json') {
+        if (r.c[j] !== null && sameJson(v, r.c[j])) { return; }  // seulement mis en forme : pas une modification
+        var pb = jsonProblem(v);
+        if (pb && !bad) { bad = 'JSON invalide pour « ' + data.columns[j] + ' » : ' + pb; }
+      }
       if (v !== r.c[j]) { changes[j] = v; count++; }
     });
+    if (bad) { showOp('ko', bad); return; }
     if (count === 0) { cancelEdit(); return; }
     showOp('busy', 'Enregistrement…');
     vscode.postMessage({ type: 'updateRow', token: data.token, rowIndex: editing.i, changes: changes });
@@ -605,10 +702,11 @@ const SCRIPT = String.raw`
       });
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
-        else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+        else if (enterSaves(j, e)) { e.preventDefault(); saveEdit(); }
       });
       setTimeout(grow, 0);
       box.appendChild(input);
+      decorate(box, input, j);
       if (nulBox) { box.appendChild(nulBox.parentNode); }
       td.appendChild(box);
       tr.appendChild(td);
@@ -648,6 +746,13 @@ const SCRIPT = String.raw`
         var field = tbody.querySelector('tr.inserting td:nth-child(' + (j + 3) + ') textarea');
         if (field) { field.focus(); }
         return;
+      }
+      if (c.mode === 'value' && kindOf(j) === 'json') {
+        var pj = jsonProblem(c.val);
+        if (pj) {
+          showOp('ko', 'JSON invalide pour « ' + data.columns[j] + ' » : ' + pj);
+          return;
+        }
       }
       if (c.mode === 'value') { values[j] = c.val; }
       else if (c.mode === 'null') { values[j] = null; }
@@ -717,7 +822,7 @@ const SCRIPT = String.raw`
       input.addEventListener('input', function () { c.val = input.value; c.mode = 'value'; sync(); grow(); });
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); cancelInsert(); }
-        else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveInsert(); }
+        else if (enterSaves(j, e)) { e.preventDefault(); saveInsert(); }
       });
       if (defBox) {
         defBox.addEventListener('change', function () {
@@ -734,6 +839,7 @@ const SCRIPT = String.raw`
         });
       }
       box.appendChild(input);
+      decorate(box, input, j);
       if (flags.childNodes.length) { box.appendChild(flags); }
       td.appendChild(box);
       tr.appendChild(td);
@@ -1038,6 +1144,7 @@ export class ResultsPanel {
           insertable: planned.plan.insertable,
           hasDefault: planned.plan.hasDefault,
           nullable: planned.plan.nullable,
+          kinds: planned.plan.kinds,
         };
       } else {
         readOnlyReason = planned.reason;
