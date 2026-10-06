@@ -262,3 +262,24 @@ test('fermeture pendant une requête : l\'appel échoue proprement ; plusieurs p
   await b.dispose();
   await a.dispose();
 });
+
+test('filtres par colonne et pagination par clé (SQLite)', async () => {
+  const d = createDriver(cfg(), '', opts);
+  const { parseFilter } = require('../.test-build/browse.js');
+  const orders = await d.listColumns('main', 'orders');
+  const b = { dbType: 'sqlite', container: 'main', table: 'orders', columns: orders, pageSize: 2, offset: 0 };
+  const ids = async (q) => (await d.query(q.sql, q.params)).rows.map((r) => Number(r[0]));
+  assert.deepEqual(await ids(buildPageQuery({ ...b, filter: 'total > 10' })), [2, 3]);
+  assert.deepEqual(await ids(buildPageQuery({ ...b, filter: 'total >= 5 ; customer_id = 1' })), [1, 2]);
+  assert.deepEqual(await ids(buildPageQuery({ ...b, filter: 'customer_id vide' })), []);
+  assert.equal(parseFilter('total>10', orders).conditions[0].op, '>');
+  // clé simple, page 2 par clé
+  assert.deepEqual(await ids(buildPageQuery({ ...b, offset: 2, after: [2] })), [3]);
+  assert.ok(!/OFFSET [1-9]/.test(buildPageQuery({ ...b, offset: 2, after: [2] }).sql));
+  // clé composite
+  const lines = await d.listColumns('main', 'lines');
+  const lb = { dbType: 'sqlite', container: 'main', table: 'lines', columns: lines, pageSize: 1, offset: 1, after: [1, 1] };
+  const r = await d.query(buildPageQuery(lb).sql, buildPageQuery(lb).params);
+  assert.deepEqual(r.rows.map((x) => [Number(x[0]), Number(x[1])]), [[1, 2]]);
+  await d.dispose();
+});

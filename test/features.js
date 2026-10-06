@@ -7,6 +7,7 @@ const { JSDOM } = require('jsdom');
 const { createDriver } = require('../.test-build/drivers.js');
 const { ResultsPanel } = require('../.test-build/panel.js');
 const { formatRows, streamTable } = require('../.test-build/exporter.js');
+const { buildPageQuery, buildCountQuery, parseFilter, keysetColumns } = require('../.test-build/browse.js');
 const { buildEdges, layoutEr, toMermaid } = require('../.test-build/erLayout.js');
 
 const KIND = process.argv[2];
@@ -285,9 +286,52 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
   assert.ok(rq.startsWith(`INSERT INTO ${q('ma_table')} (${q('id')}, ${q('nom')}) VALUES`) && rq.includes("'Alpha'"), rq);
   ok('résultat de requête libre : INSERT SQL avec le nom de table demandé');
 
+  // ------------------------------------------------------------ filtres par colonne, pagination par clé
+  console.log('Filtres par colonne et pagination par clé');
+  await db(`CREATE TABLE ${T('shop', 'kk')} (a int, b int, nom ${KIND === 'pg' ? 'text' : 'VARCHAR(30)'}, prix ${KIND === 'pg' ? 'numeric(8,2)' : 'DECIMAL(8,2)'}, PRIMARY KEY (a, b))`);
+  const kv = [];
+  for (let a = 1; a <= 5; a++) { for (let b = 1; b <= 7; b++) { kv.push(`(${a}, ${b}, '${(a + b) % 3 === 0 ? 'Dupont' : 'Martin'} ${a}-${b}', ${a * 10 + b})`); } }
+  await db(`INSERT INTO ${T('shop', 'kk')} VALUES ${kv.join(',')}`);
+  const kcols = await driver.listColumns('shop', 'kk');
+  const kb = { dbType: CFG.type, container: 'shop', table: 'kk', columns: kcols, pageSize: 10, offset: 0 };
+  const count = async (filter) => { const c = buildCountQuery({ ...kb, filter }); return Number((await db(c.sql, c.params)).rows[0][0]); };
+  assert.equal(await count('prix > 40'), 14);
+  assert.equal(await count('prix >= 41 ; nom contient dupont'), 5);
+  assert.equal(await count("nom commence par 'Martin 1'"), 5);
+  assert.equal(await count('nom finit par 7'), 5);
+  assert.equal(await count('a = 2 ; b != 3'), 6);
+  assert.equal(await count('nom vide'), 0);
+  assert.equal(await count('nom non vide'), 35);
+  assert.equal(await count('dupont'), 12, 'sans condition : recherche globale');
+  assert.equal(await count('prix > 1000 ; martin'), 0, 'condition + recherche globale combinées');
+  assert.deepEqual(parseFilter('prix > 20 ; zzz', kcols), { conditions: [{ column: 'prix', op: '>', value: '20' }], term: 'zzz' });
+  assert.deepEqual(parseFilter('prixx > 20', kcols).conditions, []);
+  ok('conditions par colonne (>, >=, !=, contient, commence, finit, vide) + recherche globale');
+
+  // pagination par clé composite : mêmes lignes que par OFFSET
+  assert.deepEqual(keysetColumns({ ...kb, sort: undefined }).map((c) => c.name), ['a', 'b']);
+  assert.equal(keysetColumns({ ...kb, sort: { column: 'nom', dir: 'asc' } }), null);
+  const viaOffset = [];
+  for (let off = 0; off < 35; off += 10) { const g = buildPageQuery({ ...kb, offset: off }); viaOffset.push(...(await db(g.sql, g.params)).rows.slice(0, 10).map((r) => r.slice(0, 2).join('/'))); }
+  const viaKeys = [];
+  let after;
+  for (let i = 0; i < 4; i++) {
+    const g = buildPageQuery({ ...kb, offset: i * 10, after });
+    assert.ok(i === 0 || !/OFFSET [1-9]/.test(g.sql), g.sql);
+    const rows = (await db(g.sql, g.params)).rows.slice(0, 10);
+    viaKeys.push(...rows.map((r) => r.slice(0, 2).join('/')));
+    after = [rows[rows.length - 1][0], rows[rows.length - 1][1]];
+  }
+  assert.deepEqual(viaKeys, viaOffset);
+  assert.equal(viaKeys.length, 35);
+  const fq = buildPageQuery({ ...kb, offset: 10, filter: 'prix > 30', after: [3, 7] });
+  const fr = (await db(fq.sql, fq.params)).rows.map((r) => r.slice(0, 2).join('/'));
+  assert.deepEqual(fr.slice(0, 3), ['4/1', '4/2', '4/3']);
+  ok('pagination par clé composite identique à OFFSET, sans OFFSET, combinée au filtre');
+
   // nettoyage
   fs.rmSync(tmp, { recursive: true, force: true });
-  for (const t of ['produits_copie', 'piege', 'piege2', 'gros']) { await db(`DROP TABLE ${T('shop', t)}`); }
+  for (const t of ['produits_copie', 'piege', 'piege2', 'gros', 'kk']) { await db(`DROP TABLE ${T('shop', t)}`); }
   await db(`DROP VIEW ${T('shop', 'v_chers')}`);
   await db(KIND === 'pg' ? 'DROP SCHEMA shop2 CASCADE' : 'DROP DATABASE shop2');
   console.log(`\n${passed} vérifications OK (${KIND})`);

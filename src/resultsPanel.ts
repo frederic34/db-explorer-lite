@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { buildCountQuery, buildPageQuery } from './browse';
+import { buildCountQuery, buildPageQuery, keysetColumns } from './browse';
 import {
   buildDeletes,
   buildInsert,
@@ -64,6 +64,8 @@ interface BrowseState {
   filter: string;
   where?: WhereState;
   hasNext: boolean;
+  /** Pagination par clé : keys[p] = valeurs de clé de la dernière ligne de la page p-1 (absent = pagination par OFFSET). */
+  keys: (unknown[] | undefined)[];
   /** Total des lignes pour le filtre courant : undefined = calcul en cours, null = indisponible. */
   total?: number | null;
   /** Numéro de la dernière requête de page lancée / du dernier comptage lancé (pour ignorer les anciens). */
@@ -300,7 +302,7 @@ const SCRIPT = String.raw`
   var bar = el('div', 'bar');
   var filter = el('input');
   filter.type = 'search';
-  filter.placeholder = server ? 'Filtrer (toute la table)…' : 'Filtrer les lignes…';
+  filter.placeholder = server ? 'Filtrer (toute la table) : texte, ou prix > 20 ; nom contient x' : 'Filtrer les lignes…';
   if (server) { filter.value = data.browse.filter; }
   var info = el('span', 'muted');
   var spacer = el('span', 'spacer');
@@ -998,6 +1000,7 @@ export class ResultsPanel {
       filter: init?.filter ?? '',
       where: init?.where ?? opts.where,
       hasNext: false,
+      keys: [],
       total: undefined,
       loadSeq: 0,
       countSeq: 0,
@@ -1078,6 +1081,7 @@ export class ResultsPanel {
       sort: b.sort ? { column: src.tableColumns[b.sort.col].name, dir: b.sort.dir } : undefined,
       filter: b.filter,
       where: b.where ? { column: src.tableColumns[b.where.col].name, value: b.where.value } : undefined,
+      after: b.offset > 0 ? b.keys[Math.round(b.offset / b.pageSize)] : undefined,
     });
     const driver = await src.getDriver();
     const res = await driver.query(query.sql, query.params);
@@ -1173,6 +1177,7 @@ export class ResultsPanel {
       sort: b.sort,
       filter: b.filter,
       where: b.where,
+      keys: b.keys,
     };
     let recount = msg.refresh === true;
 
@@ -1224,9 +1229,26 @@ export class ResultsPanel {
       next.offset = 0;
       recount = true;
     }
+    if (msg.page === undefined && msg.refresh !== true) {
+      next.keys = []; // pageSize / tri / filtre changés : les anciens repères ne valent plus
+    }
     if (msg.page === 'next') {
       if (!b.hasNext) {
         return failPage("Il n'y a pas de page suivante.");
+      }
+      const ks = keysetColumns({
+        dbType: b.src.dbType,
+        columns: b.src.tableColumns,
+        sort: next.sort ? { column: b.src.tableColumns[next.sort.col].name, dir: next.sort.dir } : undefined,
+      });
+      const lastRow = this.last.rows[this.last.rows.length - 1];
+      if (ks && lastRow) {
+        const idx = ks.map((c) => this.last!.columns.indexOf(c.name));
+        const vals = idx.map((i) => (i >= 0 ? lastRow[i] : undefined));
+        if (vals.every((v) => v !== null && v !== undefined)) {
+          next.keys = [...next.keys];
+          next.keys[Math.round((next.offset + next.pageSize) / next.pageSize)] = vals;
+        }
       }
       next.offset += next.pageSize;
     } else if (msg.page === 'prev') {
