@@ -13,6 +13,8 @@ interface FormValues {
   password: string;
   database: string;
   ssl: boolean;
+  readOnly: boolean;
+  production: boolean;
 }
 
 interface InitData {
@@ -52,6 +54,8 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
       user: existing?.user ?? defaultUser(type),
       database: existing?.database ?? (type === 'postgres' ? 'postgres' : ''),
       ssl: existing?.ssl ?? false,
+      readOnly: existing?.readOnly ?? false,
+      production: existing?.production ?? false,
     },
   };
   panel.webview.html = buildHtml(init, randomBytes(16).toString('hex'));
@@ -82,6 +86,8 @@ export function openConnectionForm(manager: ConnectionManager, existing?: Connec
         user: v.user.trim(),
         database,
         ssl: v.ssl === true,
+        readOnly: v.readOnly === true || undefined,
+        production: v.production === true || undefined,
       },
     };
   };
@@ -218,6 +224,8 @@ const SCRIPT = String.raw`
   form.elements['type'].value = v.type;
   Object.keys(fields).forEach(function (k) { if (k !== 'password') { fields[k].value = v[k] || ''; } });
   $('ssl').checked = !!v.ssl;
+  $('readOnly').checked = !!v.readOnly;
+  $('production').checked = !!v.production;
   if (init.editing) {
     $('title').textContent = 'Modifier la connexion';
     fields.password.placeholder = 'Laisser vide pour conserver le mot de passe actuel';
@@ -321,7 +329,7 @@ const SCRIPT = String.raw`
     return {
       type: currentType(), name: fields.name.value, host: fields.host.value, port: fields.port.value,
       user: fields.user.value, password: fields.password.value, database: fields.database.value,
-      ssl: $('ssl').checked
+      ssl: $('ssl').checked, readOnly: $('readOnly').checked, production: $('production').checked
     };
   }
   function setBusy(busy) { $('testBtn').disabled = busy; $('saveBtn').disabled = busy; }
@@ -427,6 +435,12 @@ function buildHtml(init: InitData, nonce: string): string {
 
     <fieldset>
       <label class="check"><input type="checkbox" id="ssl"> Chiffrer la connexion (SSL/TLS)</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Sécurité</legend>
+      <label class="check"><input type="checkbox" id="production"> Base de production (badge d'avertissement, confirmation avant toute écriture)</label>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="readOnly"> Lecture seule (aucune écriture : grille et éditeur SQL, refusée aussi par le serveur)</label>
     </fieldset>
 
     <div>

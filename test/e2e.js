@@ -769,6 +769,82 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.ok(bigp.trs().length <= 1000);
   ok('taille de page demandée démesurée : plafonnée', `${bigp.trs().length} lignes`);
 
+
+  // ================================================================ GARDE-FOUS
+  console.log('Garde-fous : lecture seule et production');
+  const roDriver = createDriver({ ...CFG, readOnly: true }, PW, opts);
+  const nomAvant = (await row('pag', `${q('id')} = 1`))[2];
+  assert.equal((await roDriver.query(`SELECT COUNT(*) FROM ${T('pag')}`)).rows.length, 1);
+  await assert.rejects(roDriver.query(`UPDATE ${T('pag')} SET ${q('txt')} = 'pirate' WHERE ${q('id')} = 1`), /read.only|READ ONLY|1792/i);
+  await assert.rejects(roDriver.query(`DELETE FROM ${T('pag')}`), /read.only|READ ONLY|1792/i);
+  await assert.rejects(roDriver.query(`INSERT INTO ${T('pag')} VALUES (777777, 1, 'x')`), /read.only|READ ONLY|1792/i);
+  await assert.rejects(roDriver.executeBatch([{ sql: `UPDATE ${T('pag')} SET ${q('txt')} = 'pirate' WHERE ${q('id')} = 1`, params: [], expect: 1 }]), /read.only|READ ONLY|1792/i);
+  await assert.rejects(roDriver.insertRow(KIND === 'pg' ? `INSERT INTO ${T('pag')} VALUES (777778, 1, 'x') RETURNING *` : `INSERT INTO ${T('pag')} VALUES (777778, 1, 'x')`, []), /read.only|READ ONLY|1792/i);
+  assert.equal((await row('pag', `${q('id')} = 1`))[2], nomAvant);
+  assert.equal(await row('pag', `${q('id')} = 777777`), undefined);
+  // la connexion normale n'est pas affectée (pas de fuite du réglage)
+  await db(`UPDATE ${T('pag')} SET ${q('txt')} = ${KIND === 'pg' ? '$1' : '?'} WHERE ${q('id')} = 1`, [nomAvant]);
+  await roDriver.dispose();
+  ok('connexion en lecture seule : SELECT permis ; UPDATE, DELETE, INSERT, executeBatch refusés par le serveur ; connexion normale intacte');
+
+  // grille : aucune édition, mentions affichées
+  const tcols = await driver.listColumns(SCHEMA, 'pag');
+  const openG = async (extra) => {
+    await panel.openTable({ dbType: CFG.type, container: SCHEMA, table: 'pag', tableColumns: tcols, getDriver: async () => driver,
+      connectionName: CFG.name, isView: false, pageSize: 50, ...extra });
+    return mount(tcols.map((c) => c.name));
+  };
+  const roGrid = await openG({ readOnly: true, badges: ['LECTURE SEULE'] });
+  assert.equal(roGrid.d.querySelectorAll('input[type=checkbox]').length, 0);
+  assert.ok(/Lecture seule : connexion en lecture seule/.test(roGrid.d.getElementById('root').textContent));
+  assert.equal(roGrid.d.querySelector('.badge').textContent, 'LECTURE SEULE');
+  assert.ok(!roGrid.d.querySelector('.badge.prod'));
+  ok('grille d\'une connexion en lecture seule : ni cases ni crayon, raison et mention affichées');
+
+  // production : confirmation avant modification / insertion / suppression
+  const pg2 = await openG({ production: true, badges: ['PRODUCTION'] });
+  assert.ok(pg2.d.querySelector('.badge.prod'));
+  global.__modals = [];
+  global.__nextChoice = undefined;                       // l'utilisateur refuse
+  let trp = (pg2.pencil(pg2.rowById(1)).click(), pg2.editing());
+  pg2.type(pg2.input(trp, 'txt'), 'refusé');
+  pg2.save();
+  await until(() => global.__modals.length === 1, 'modale prod');
+  await tick(80);
+  assert.ok(/PRODUCTION : Modifier 1 ligne de « pag »/.test(global.__modals[0]), global.__modals[0]);
+  assert.equal((await row('pag', `${q('id')} = 1`))[2], nomAvant, 'modification refusée : base inchangée');
+  assert.ok(pg2.editing(), 'la ligne reste en édition');
+  assert.equal(pg2.op().cls, '', 'annulation silencieuse');
+  assert.ok(!pg2.editing().querySelector('textarea:disabled'));
+  global.__nextChoice = 'Confirmer';                    // il confirme
+  pg2.save();
+  await waitOp(pg2, 'ok', 'update prod');
+  assert.equal((await row('pag', `${q('id')} = 1`))[2], 'refusé');
+  assert.equal(global.__modals.length, 2);
+  ok('production : modification confirmée par modale (refus = base inchangée et édition conservée)');
+
+  global.__nextChoice = undefined;
+  addBtnOf(pg2).click();
+  pg2.type(ta(pg2, 'id'), '888001'); pg2.type(ta(pg2, 'grp'), '1'); pg2.type(ta(pg2, 'txt'), 'prod');
+  okBtn(pg2).click();
+  await until(() => global.__modals.length === 3, 'modale insertion');
+  await tick(80);
+  assert.ok(/Insérer une ligne dans « pag »/.test(global.__modals[2]));
+  assert.equal(await row('pag', `${q('id')} = 888001`), undefined);
+  assert.ok(insRow(pg2), 'formulaire d\'insertion conservé');
+  global.__nextChoice = 'Confirmer';
+  okBtn(pg2).click();
+  await waitOp(pg2, 'ok', 'insert prod');
+  assert.ok(await row('pag', `${q('id')} = 888001`));
+  pg2.check(pg2.rowById(888001));
+  global.__nextChoice = 'Supprimer';
+  pg2.delBtn().click();
+  await waitOp(pg2, 'ok', 'delete prod');
+  assert.ok(/PRODUCTION : supprimer 1 ligne/.test(global.__modals[global.__modals.length - 1]), global.__modals[global.__modals.length - 1]);
+  assert.equal(await row('pag', `${q('id')} = 888001`), undefined);
+  await db(`UPDATE ${T('pag')} SET ${q('txt')} = ${KIND === 'pg' ? '$1' : '?'} WHERE ${q('id')} = 1`, [nomAvant]);
+  ok('production : insertion et suppression confirmées, message de suppression marqué PRODUCTION');
+
   console.log(`\n${passed} vérifications OK (${KIND})`);
   await driver.dispose();
 })().catch(async (e) => { console.error('\n✗ ÉCHEC :', e.stack || e.message); try { await driver.dispose(); } catch {} process.exit(1); });

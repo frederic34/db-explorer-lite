@@ -21,6 +21,8 @@ export interface EditSpec {
   table: string;
   tableColumns: ColumnInfo[];
   getDriver: () => Promise<DbDriver>;
+  /** Connexion de production : confirmation avant toute écriture. */
+  production?: boolean;
 }
 
 /** Aperçu paginé d'une table ou d'une vue. */
@@ -29,6 +31,10 @@ export interface TableSource extends EditSpec {
   isView: boolean;
   /** Lignes par page au départ. */
   pageSize: number;
+  /** Connexion en lecture seule : la grille n'est pas modifiable. */
+  readOnly?: boolean;
+  /** Mentions affichées en tête (PRODUCTION, LECTURE SEULE). */
+  badges?: string[];
 }
 
 type SortState = { col: number; dir: 'asc' | 'desc' } | null;
@@ -89,6 +95,7 @@ interface Payload {
   edit?: EditInfo;
   readOnlyReason?: string;
   browse?: BrowseInfo;
+  badges?: string[];
 }
 
 interface State {
@@ -105,6 +112,10 @@ const CSS = `
          color: var(--vscode-foreground); background: var(--vscode-editor-background);
          margin: 0; padding: 10px 14px; }
   .muted { color: var(--vscode-descriptionForeground); }
+  .badge { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 3px; font-size: 0.8em; font-weight: 600;
+           border: 1px solid var(--vscode-descriptionForeground); color: var(--vscode-descriptionForeground); }
+  .badge.prod { background: var(--vscode-errorForeground); border-color: var(--vscode-errorForeground);
+                color: var(--vscode-editor-background); }
   .top { margin-bottom: 8px; }
   details.sql { margin-bottom: 8px; }
   details.sql summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
@@ -184,6 +195,9 @@ const SCRIPT = String.raw`
 
   var top = el('div', 'top');
   top.appendChild(el('strong', '', data.connection));
+  (data.badges || []).forEach(function (b) {
+    top.appendChild(el('span', b === 'PRODUCTION' ? 'badge prod' : 'badge', b));
+  });
   var summary = el('span', 'muted', ' · ' + data.summary);
   top.appendChild(summary);
   root.appendChild(top);
@@ -783,7 +797,7 @@ export class ResultsPanel {
   private token = '';
 
   /** Résultat d'une requête libre : lecture seule, tri et filtre appliqués à la page affichée. */
-  showResult(connection: string, sql: string, result: QueryResult): void {
+  showResult(connection: string, sql: string, result: QueryResult, badges?: string[]): void {
     let summary: string;
     if (result.columns.length > 0) {
       summary = plural(result.rowCount, 'ligne', 'lignes');
@@ -805,6 +819,7 @@ export class ResultsPanel {
       columns: result.columns,
       rows: result.rows,
       summary,
+      badges,
     });
   }
 
@@ -837,7 +852,9 @@ export class ResultsPanel {
     const state: State = { columns: page.columns, rows: page.rows.map((r) => [...r]), browse: b };
     let editInfo: EditInfo | undefined;
     let readOnlyReason: string | undefined;
-    if (src.isView) {
+    if (src.readOnly) {
+      readOnlyReason = 'connexion en lecture seule';
+    } else if (src.isView) {
       readOnlyReason = 'les vues ne sont pas modifiables';
     } else {
       const planned = planEditing(src.dbType, page.columns, src.tableColumns);
@@ -868,6 +885,7 @@ export class ResultsPanel {
       edit: editInfo,
       readOnlyReason,
       browse: this.browseInfo(b),
+      badges: src.badges,
     });
     this.startCount(b);
   }
@@ -1059,7 +1077,7 @@ export class ResultsPanel {
     });
   }
 
-  showError(connection: string, sql: string, message: string): void {
+  showError(connection: string, sql: string, message: string, badges?: string[]): void {
     this.last = undefined;
     this.render({
       kind: 'error',
@@ -1070,6 +1088,7 @@ export class ResultsPanel {
       rows: [],
       summary: 'erreur',
       error: message,
+      badges,
     });
   }
 
@@ -1130,6 +1149,23 @@ export class ResultsPanel {
     }
   }
 
+  /** Sur une connexion de production, demande confirmation avant une modification ou une insertion. */
+  private async confirmProduction(spec: EditSpec, message: string): Promise<boolean> {
+    if (!spec.production) {
+      return true;
+    }
+    if (!vscode.workspace.getConfiguration('dbExplorer').get<boolean>('confirmOnProduction', true)) {
+      return true;
+    }
+    const go = 'Confirmer';
+    const choice = await vscode.window.showWarningMessage(
+      `⚠ PRODUCTION : ${message}`,
+      { modal: true, detail: 'Vous êtes connecté à une base de production.' },
+      go,
+    );
+    return choice === go;
+  }
+
   private async insertRow(token: string, values: unknown): Promise<void> {
     const fail = (message: string) => this.reply(token, { op: 'insert', ok: false, message });
     const st = this.last;
@@ -1159,6 +1195,9 @@ export class ResultsPanel {
       vals.push(value);
     }
 
+    if (!(await this.confirmProduction(spec, `Insérer une ligne dans « ${spec.table} » ?`))) {
+      return this.reply(token, { op: 'insert', ok: false, cancelled: true });
+    }
     try {
       const driver = await spec.getDriver();
       const stmt = buildInsert(spec.dbType, spec.container, spec.table, st.columns, idx, vals);
@@ -1244,6 +1283,9 @@ export class ResultsPanel {
       return this.reply(token, { op: 'update', ok: true, rowIndex, values: row });
     }
 
+    if (!(await this.confirmProduction(spec, `Modifier 1 ligne de « ${spec.table} » ?`))) {
+      return this.reply(token, { op: 'update', ok: false, cancelled: true });
+    }
     try {
       const driver = await spec.getDriver();
       const pkValues = plan.pk.map((j) => row[j]);
@@ -1299,7 +1341,7 @@ export class ResultsPanel {
 
     const remove = 'Supprimer';
     const choice = await vscode.window.showWarningMessage(
-      `Supprimer ${plural(indexes.length, 'ligne', 'lignes')} de « ${spec.table} » ?`,
+      `${spec.production ? '⚠ PRODUCTION : s' : 'S'}upprimer ${plural(indexes.length, 'ligne', 'lignes')} de « ${spec.table} » ?`,
       { modal: true, detail: 'Cette action est irréversible.' },
       remove,
     );

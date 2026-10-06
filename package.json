@@ -220,6 +220,16 @@
           ],
           "default": ",",
           "description": "Séparateur utilisé pour l'export CSV (« ; » est souvent préférable pour Excel en français)."
+        },
+        "dbExplorer.confirmDangerous": {
+          "type": "boolean",
+          "default": true,
+          "description": "Demander confirmation avant d'exécuter UPDATE / DELETE sans WHERE, DROP, TRUNCATE ou ALTER … DROP."
+        },
+        "dbExplorer.confirmOnProduction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Sur une connexion marquée « production », demander confirmation avant toute écriture (éditeur SQL et grille)."
         }
       }
     }

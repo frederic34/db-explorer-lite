@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
 import { ResultsPanel } from './resultsPanel';
+import { assessRun } from './sqlGuard';
 import { ConnectionConfig } from './types';
 import {
   ColumnNode,
@@ -35,7 +36,14 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     const id = docConnections.get(editor.document.uri.toString());
     const cfg = id ? mgr.get(id) : undefined;
-    status.text = cfg ? `$(database) ${cfg.name}` : '$(database) Choisir une connexion SQL';
+    status.text = cfg
+      ? `$(${cfg.production ? 'warning' : cfg.readOnly ? 'lock' : 'database'}) ${cfg.name}` +
+        (cfg.production ? ' · PROD' : '') +
+        (cfg.readOnly ? ' · lecture seule' : '')
+      : '$(database) Choisir une connexion SQL';
+    status.backgroundColor = cfg?.production
+      ? new vscode.ThemeColor('statusBarItem.errorBackground')
+      : undefined;
     status.tooltip = 'DB Explorer : connexion utilisée pour exécuter les requêtes de ce fichier';
     status.show();
   };
@@ -80,11 +88,40 @@ export function activate(context: vscode.ExtensionContext): void {
     return cfg.id;
   }
 
+  const badgesOf = (cfg: ConnectionConfig): string[] => [
+    ...(cfg.production ? ['PRODUCTION'] : []),
+    ...(cfg.readOnly ? ['LECTURE SEULE'] : []),
+  ];
+
   /** Exécute une requête libre et affiche le résultat (lecture seule). */
   async function execute(connectionId: string, sql: string): Promise<void> {
     const cfg = mgr.get(connectionId);
     if (!cfg) {
       return;
+    }
+    const badges = badgesOf(cfg);
+
+    // Garde-fous : refus en lecture seule, confirmation des requêtes dangereuses / de production.
+    const verdict = assessRun(sql, cfg.type, {
+      readOnly: cfg.readOnly,
+      production: cfg.production,
+      confirmDangerous: config().get<boolean>('confirmDangerous', true),
+      confirmProduction: config().get<boolean>('confirmOnProduction', true),
+    });
+    if (verdict.blocked) {
+      results.showError(cfg.name, sql, verdict.blocked, badges);
+      return;
+    }
+    if (verdict.confirm) {
+      const run = 'Exécuter';
+      const choice = await vscode.window.showWarningMessage(
+        verdict.confirm.message,
+        { modal: true, detail: verdict.confirm.detail },
+        run,
+      );
+      if (choice !== run) {
+        return;
+      }
     }
     await vscode.window.withProgress(
       {
@@ -94,9 +131,9 @@ export function activate(context: vscode.ExtensionContext): void {
       async () => {
         try {
           const driver = await mgr.getDriver(connectionId);
-          results.showResult(cfg.name, sql, await driver.query(sql));
+          results.showResult(cfg.name, sql, await driver.query(sql), badges);
         } catch (err) {
-          results.showError(cfg.name, sql, errorMessage(err));
+          results.showError(cfg.name, sql, errorMessage(err), badges);
         }
       },
     );
@@ -123,9 +160,17 @@ export function activate(context: vscode.ExtensionContext): void {
             connectionName: cfg.name,
             isView: node.table.isView,
             pageSize: config().get<number>('previewLimit', 200),
+            readOnly: cfg.readOnly,
+            production: cfg.production,
+            badges: badgesOf(cfg),
           });
         } catch (err) {
-          results.showError(cfg.name, `Aperçu de ${node.container}.${node.table.name}`, errorMessage(err));
+          results.showError(
+            cfg.name,
+            `Aperçu de ${node.container}.${node.table.name}`,
+            errorMessage(err),
+            badgesOf(cfg),
+          );
         }
       },
     );

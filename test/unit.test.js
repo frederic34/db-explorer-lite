@@ -144,3 +144,93 @@ test('DELETE : clé composite', () => {
   assert.deepEqual(s.params, ['1', '2', '3', '4']);
   assert.equal(s.expect, 2);
 });
+
+// ---------------------------------------------------------------- garde-fous SQL
+const { parseStatements, splitStatements, analyze, assessRun } = require('../.test-build/sqlGuard.js');
+const kinds = (sql, db = 'postgres') => analyze(sql, db).map((s) => s.kind);
+const dangers = (sql, db = 'postgres') => analyze(sql, db).map((s) => s.danger).filter(Boolean);
+const opts = { confirmDangerous: true, confirmProduction: true };
+
+test('découpage : ; dans chaînes, commentaires, identifiants et dollars', () => {
+  assert.deepEqual(splitStatements("select 'a;b'; select 2", 'postgres'), ["select 'a;b'", 'select 2']);
+  assert.deepEqual(splitStatements('select 1; -- fin; ici\nselect 2;', 'postgres'), ['select 1', '-- fin; ici\nselect 2']);
+  assert.deepEqual(splitStatements('select /* a; b */ 1; select 2', 'mysql'), ['select /* a; b */ 1', 'select 2']);
+  assert.deepEqual(splitStatements('select "a;b" from t; select 2', 'postgres'), ['select "a;b" from t', 'select 2']);
+  assert.deepEqual(splitStatements('select `a;b` from t; select 2', 'mysql'), ['select `a;b` from t', 'select 2']);
+  assert.deepEqual(splitStatements("select 'it''s;'; select 2", 'postgres'), ["select 'it''s;'", 'select 2']);
+  assert.deepEqual(splitStatements("select 'a\\';b'; select 2", 'mysql'), ["select 'a\\';b'", 'select 2']);
+  assert.equal(splitStatements("select 'a\\'; select 2", 'postgres').length, 2, 'PostgreSQL : antislash littéral');
+  assert.deepEqual(
+    splitStatements('create function f() returns int as $$ begin; select 1; end $$ language sql; select 2', 'postgres'),
+    ['create function f() returns int as $$ begin; select 1; end $$ language sql', 'select 2']);
+  assert.deepEqual(splitStatements('select $t$a;b$t$; select 2', 'postgres'), ['select $t$a;b$t$', 'select 2']);
+  assert.deepEqual(splitStatements('select 1;;; ;', 'postgres'), ['select 1']);
+  assert.deepEqual(splitStatements('select 1 # note; x\n; select 2', 'mysql'), ['select 1 # note; x', 'select 2']);
+  assert.deepEqual(splitStatements('', 'mysql'), []);
+  assert.deepEqual(splitStatements('-- rien', 'mysql'), []);
+});
+
+test('classification : lectures, session, écritures', () => {
+  assert.deepEqual(kinds('SELECT 1; show tables; describe t; explain select 1; values (1); table t'),
+    Array(6).fill('read'));
+  assert.deepEqual(kinds('SELECT * FROM t FOR UPDATE'), ['read']);
+  assert.deepEqual(kinds('(select 1) union (select 2)'), ['read']);
+  assert.deepEqual(kinds('WITH x AS (SELECT 1) SELECT * FROM x'), ['read']);
+  assert.deepEqual(kinds('WITH x AS (DELETE FROM t WHERE a=1 RETURNING *) SELECT * FROM x'), ['write']);
+  assert.deepEqual(kinds('SELECT * INTO nouvelle FROM t'), ['write']);
+  assert.deepEqual(kinds('EXPLAIN ANALYZE DELETE FROM t WHERE a = 1'), ['write']);
+  assert.deepEqual(kinds('INSERT INTO t VALUES (1); UPDATE t SET a=1 WHERE b=2; DELETE FROM t WHERE a=1; DROP TABLE t; CREATE TABLE x(a int); CALL p(); COPY t TO STDOUT'),
+    Array(7).fill('write'));
+  assert.deepEqual(kinds("SET search_path = a; BEGIN; COMMIT; ROLLBACK"), ['session', 'session', 'session', 'session']);
+  assert.deepEqual(kinds('SET default_transaction_read_only = off; SET SESSION TRANSACTION READ WRITE; START TRANSACTION READ WRITE'),
+    ['write', 'write', 'write'], 'on ne laisse pas lever la lecture seule');
+  assert.deepEqual(kinds("select 'DELETE FROM t' as x, 'a;b' -- drop table t\n"), ['read'], 'mots dans chaînes et commentaires ignorés');
+  assert.deepEqual(kinds('select replace(a, b, c) from t', 'mysql'), ['read']);
+  assert.deepEqual(kinds("select '"), ['read'], 'chaîne non terminée : pas de plantage');
+});
+
+test('dangers : sans WHERE, DROP, TRUNCATE, ALTER DROP', () => {
+  assert.equal(dangers('UPDATE t SET a = 1').length, 1);
+  assert.equal(dangers('DELETE FROM t').length, 1);
+  assert.equal(dangers('UPDATE t SET a = 1 WHERE id = 1').length, 0);
+  assert.equal(dangers('DELETE FROM t USING u WHERE t.a = u.a').length, 0);
+  assert.equal(dangers("UPDATE t SET a = 'where'").length, 1, 'WHERE dans une chaîne ne compte pas');
+  assert.equal(dangers('UPDATE t SET a = 1 -- where\n').length, 1, 'WHERE en commentaire ne compte pas');
+  assert.equal(dangers('DROP TABLE t').length, 1);
+  assert.equal(dangers('TRUNCATE t').length, 1);
+  assert.equal(dangers('ALTER TABLE t DROP COLUMN a').length, 1);
+  assert.equal(dangers('ALTER TABLE t ADD COLUMN a int').length, 0);
+  assert.equal(dangers('WITH x AS (SELECT 1) DELETE FROM t').length, 1);
+  assert.equal(dangers('SELECT * FROM t').length, 0);
+  assert.equal(dangers('SELECT 1; DELETE FROM t; DROP TABLE u').length, 2, 'une alerte par instruction');
+  assert.equal(dangers('UPDATE `where` SET a = 1', 'mysql').length, 1, 'identifiant nommé where');
+});
+
+test('assessRun : lecture seule, confirmation, production', () => {
+  let a = assessRun('SELECT 1', 'postgres', { ...opts, readOnly: true });
+  assert.equal(a.blocked, undefined); assert.equal(a.confirm, undefined);
+  a = assessRun('SELECT 1; DELETE FROM t WHERE a = 1', 'postgres', { ...opts, readOnly: true });
+  assert.match(a.blocked, /lecture seule.*DELETE FROM t WHERE a = 1/);
+  a = assessRun('SET autocommit = 1', 'mysql', { ...opts, readOnly: true });
+  assert.ok(a.blocked);
+  a = assessRun('SET search_path = x', 'postgres', { ...opts, readOnly: true });
+  assert.equal(a.blocked, undefined);
+
+  a = assessRun('DELETE FROM t', 'postgres', opts);
+  assert.match(a.confirm.message, /destructrice/);
+  assert.match(a.confirm.detail, /DELETE sans WHERE/);
+  a = assessRun('DELETE FROM t', 'postgres', { ...opts, confirmDangerous: false });
+  assert.equal(a.confirm, undefined);
+
+  a = assessRun('UPDATE t SET a = 1 WHERE id = 3', 'postgres', { ...opts, production: true });
+  assert.match(a.confirm.message, /PRODUCTION/);
+  assert.match(a.confirm.detail, /UPDATE t SET a = 1 WHERE id = 3/);
+  a = assessRun('SELECT 1', 'postgres', { ...opts, production: true });
+  assert.equal(a.confirm, undefined, 'lecture : aucune confirmation en production');
+  a = assessRun('UPDATE t SET a = 1 WHERE id = 3', 'postgres', { ...opts, production: true, confirmProduction: false });
+  assert.equal(a.confirm, undefined);
+  a = assessRun('DELETE FROM t', 'postgres', { ...opts, production: true });
+  assert.match(a.confirm.detail, /DELETE sans WHERE/);
+  assert.match(a.confirm.detail, /Connexion de production/);
+  assert.equal(assessRun('', 'postgres', opts).statements.length, 0);
+});

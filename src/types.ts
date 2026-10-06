@@ -10,6 +10,10 @@ export interface ConnectionConfig {
   /** MySQL : optionnelle (vide = toutes les bases). PostgreSQL : obligatoire. */
   database?: string;
   ssl?: boolean;
+  /** Connexion en lecture seule : aucune écriture (grille, éditeur SQL), imposée aussi côté serveur. */
+  readOnly?: boolean;
+  /** Base de production : badge d'avertissement et confirmation avant toute écriture. */
+  production?: boolean;
 }
 
 export interface TableInfo {

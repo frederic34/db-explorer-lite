@@ -89,6 +89,12 @@ export class MySqlDriver implements DbDriver {
       supportBigNumbers: true,
       bigNumberStrings: true,
     });
+    if (cfg.readOnly) {
+      // Garde-fou côté serveur : toute écriture échoue, quelle que soit l'origine de la requête.
+      this.pool.pool.on('connection', (conn) => {
+        conn.query('SET SESSION TRANSACTION READ ONLY', () => undefined);
+      });
+    }
   }
 
   private async run(
@@ -239,6 +245,7 @@ export class PostgresDriver implements DbDriver {
       ssl: cfg.ssl ? true : undefined,
       connectionTimeoutMillis: 10000,
       max: 3,
+      options: cfg.readOnly ? '-c default_transaction_read_only=on' : undefined,
       types: {
         getTypeParser: (oid: number, format?: string) =>
           PG_RAW_TEXT_OIDS.has(oid)

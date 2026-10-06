@@ -11,6 +11,7 @@ exports.build = () =>
       editing: path.join(root, 'src/editing.ts'),
       browse: path.join(root, 'src/browse.ts'),
       util: path.join(root, 'src/util.ts'),
+      sqlGuard: path.join(root, 'src/sqlGuard.ts'),
     },
     outdir: path.join(root, '.test-build'),
     bundle: true,
