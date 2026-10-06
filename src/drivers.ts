@@ -9,6 +9,7 @@ import {
   TableInfo,
   WriteStatement,
 } from './types';
+import { CancelToken } from './util';
 
 function mismatch(actual: number, expected: number): Error {
   return new Error(
@@ -191,11 +192,7 @@ export class MySqlDriver implements DbDriver {
     }
   }
 
-  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
-    const t0 = Date.now();
-    const { rows, fields } = await this.run(sql, params);
-    const durationMs = Date.now() - t0;
-
+  private toResult(rows: unknown, fields: mysql.FieldPacket[] | undefined, durationMs: number): QueryResult {
     if (Array.isArray(rows) && fields) {
       return buildResult(
         fields.map((f) => f.name),
@@ -213,6 +210,72 @@ export class MySqlDriver implements DbDriver {
       truncated: false,
       durationMs,
     };
+  }
+
+  /** Interrompt la requête en cours sur la connexion `threadId` (KILL QUERY, depuis une autre connexion). */
+  private killer(threadId: number, isDone: () => boolean): () => Promise<void> {
+    return async () => {
+      if (!isDone()) {
+        await this.pool.query(`KILL QUERY ${Number(threadId)}`);
+      }
+    };
+  }
+
+  async query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult> {
+    const t0 = Date.now();
+    if (!cancel) {
+      const { rows, fields } = await this.run(sql, params);
+      return this.toResult(rows, fields, Date.now() - t0);
+    }
+    const conn = await this.pool.getConnection();
+    let done = false;
+    cancel.attach(this.killer(conn.threadId, () => done));
+    try {
+      const [rows, fields] = (await conn.query({ sql, values: params, rowsAsArray: true } as mysql.QueryOptions)) as unknown as [
+        unknown,
+        mysql.FieldPacket[] | undefined,
+      ];
+      return this.toResult(rows, fields, Date.now() - t0);
+    } finally {
+      done = true;
+      cancel.detach();
+      conn.release();
+    }
+  }
+
+  async script(statements: string[], cancel?: CancelToken): Promise<QueryResult> {
+    const t0 = Date.now();
+    const conn = await this.pool.getConnection();
+    let done = false;
+    cancel?.attach(this.killer(conn.threadId, () => done));
+    let last: QueryResult | undefined;
+    let index = 0;
+    try {
+      for (const sql of statements) {
+        index++;
+        if (cancel?.requested) {
+          throw new Error('Requête annulée.');
+        }
+        const s0 = Date.now();
+        const [rows, fields] = (await conn.query({ sql, rowsAsArray: true } as mysql.QueryOptions)) as unknown as [
+          unknown,
+          mysql.FieldPacket[] | undefined,
+        ];
+        last = this.toResult(rows, fields, Date.now() - s0);
+      }
+    } catch (err) {
+      if (statements.length > 1 && !cancel?.requested) {
+        const e = err as Error;
+        e.message = `Instruction ${index}/${statements.length} : ${e.message}` +
+          (index > 1 ? `\n(les ${index - 1} instruction(s) précédente(s) ont déjà été exécutées)` : '');
+      }
+      throw err;
+    } finally {
+      done = true;
+      cancel?.detach();
+      conn.release();
+    }
+    return { ...(last as QueryResult), durationMs: Date.now() - t0, statements: statements.length };
   }
 
   async dispose(): Promise<void> {
@@ -336,10 +399,29 @@ export class PostgresDriver implements DbDriver {
     }
   }
 
-  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult> {
     const t0 = Date.now();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw: any = await this.pool.query({ text: sql, values: params, rowMode: 'array' });
+    let raw: any;
+    if (!cancel) {
+      raw = await this.pool.query({ text: sql, values: params, rowMode: 'array' });
+    } else {
+      const client = await this.pool.connect();
+      const pid = (client as unknown as { processID: number }).processID;
+      let done = false;
+      cancel.attach(async () => {
+        if (!done) {
+          await this.pool.query('SELECT pg_cancel_backend($1)', [pid]);
+        }
+      });
+      try {
+        raw = await client.query({ text: sql, values: params, rowMode: 'array' });
+      } finally {
+        done = true;
+        cancel.detach();
+        client.release();
+      }
+    }
     const durationMs = Date.now() - t0;
     // Plusieurs instructions dans le texte : pg renvoie un tableau, on affiche la dernière.
     const res = Array.isArray(raw) ? raw[raw.length - 1] : raw;

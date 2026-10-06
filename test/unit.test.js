@@ -234,3 +234,183 @@ test('assessRun : lecture seule, confirmation, production', () => {
   assert.match(a.confirm.detail, /Connexion de production/);
   assert.equal(assessRun('', 'postgres', opts).statements.length, 0);
 });
+
+// ---------------------------------------------------------------- auto-complétion
+const C = require('../.test-build/completion.js');
+const { QueryHistory, MAX_HISTORY } = require('../.test-build/history.js');
+const { SchemaCache } = require('../.test-build/schemaCache.js');
+
+const view = (extra = {}) => {
+  const data = {
+    shop: {
+      produits: [col('id', 'integer', { primaryKey: true }), col('nom'), col('prix', 'numeric')],
+      commandes: [col('id', 'integer', { primaryKey: true }), col('produit_id', 'integer')],
+    },
+    autre: { logs: [col('msg')] },
+  };
+  return {
+    dbType: 'postgres', containers: ['shop', 'autre'], defaultContainer: 'shop',
+    tables: (c) => data[c] && Object.keys(data[c]).map((name) => ({ name, isView: name === 'logs' })),
+    columns: (c, t) => data[c]?.[t],
+    ...extra,
+  };
+};
+const at = (sqlWithBar, dbType = 'postgres') => {
+  const off = sqlWithBar.indexOf('|');
+  const text = sqlWithBar.replace('|', '');
+  const { statement, before } = C.currentStatement(text, off, dbType);
+  const ctx = C.analyzeContext(before, dbType);
+  return { ctx, refs: C.referencedTables(statement, dbType), statement };
+};
+const labels = (r) => r.map((x) => x.label);
+
+test('tables citées : alias, AS, schéma, JOIN, liste à virgules, mots-clés non pris pour des alias', () => {
+  const refs = (sql) => C.referencedTables(sql, 'postgres');
+  assert.deepEqual(refs('SELECT * FROM produits p WHERE p.id = 1'), [{ table: 'produits', alias: 'p' }]);
+  assert.deepEqual(refs('SELECT * FROM shop.produits AS p'), [{ container: 'shop', table: 'produits', alias: 'p' }]);
+  assert.deepEqual(refs('SELECT * FROM produits WHERE id = 1'), [{ table: 'produits', alias: undefined }]);
+  assert.deepEqual(refs('SELECT * FROM a x JOIN b y ON x.i = y.i LEFT JOIN c ON 1=1'),
+    [{ table: 'a', alias: 'x' }, { table: 'b', alias: 'y' }, { table: 'c', alias: undefined }]);
+  assert.deepEqual(refs('SELECT * FROM a x, b y, c ORDER BY 1').map((r) => `${r.table}:${r.alias}`), ['a:x', 'b:y', 'c:undefined']);
+  assert.deepEqual(refs('UPDATE produits SET a = 1').map((r) => r.table), ['produits']);
+  assert.deepEqual(refs("SELECT 'FROM fantome' FROM vraie").map((r) => r.table), ['vraie']);
+});
+
+test('contexte de saisie : qualificatifs, préfixe, clause ; rien dans les chaînes et commentaires', () => {
+  let { ctx } = at('SELECT * FROM prod|');
+  assert.deepEqual(ctx, { qualifiers: [], prefix: 'prod', clause: 'FROM' });
+  ({ ctx } = at('SELECT p.| FROM produits p'));
+  assert.deepEqual(ctx, { qualifiers: ['p'], prefix: '', clause: 'SELECT' });
+  ({ ctx } = at('SELECT shop.produits.n| FROM produits'));
+  assert.deepEqual(ctx.qualifiers, ['shop', 'produits']);
+  assert.equal(ctx.prefix, 'n');
+  ({ ctx } = at('SELECT * FROM produits WHERE |'));
+  assert.equal(ctx.clause, 'WHERE');
+  ({ ctx } = at('SELECT 1; SELECT * FROM |'));
+  assert.equal(ctx.clause, 'FROM', 'seule l\'instruction courante compte');
+  ({ ctx } = at('SELECT 1;\n|'));
+  assert.deepEqual(ctx, { qualifiers: [], prefix: '', clause: '' });
+  assert.equal(at("SELECT 'abc|'").ctx, undefined);
+  assert.equal(at('SELECT 1 -- note |').ctx, undefined);
+  assert.equal(at('SELECT /* x |').ctx, undefined);
+  assert.equal(at('SELECT $$ x |').ctx, undefined);
+});
+
+test('propositions : tables après FROM, colonnes avec alias, schéma qualifié', () => {
+  let { ctx, refs } = at('SELECT * FROM |');
+  let items = C.complete(ctx, refs, view());
+  assert.ok(labels(items).includes('produits') && labels(items).includes('commandes'));
+  assert.ok(labels(items).includes('autre.logs'), 'hors schéma par défaut : qualifié');
+  assert.ok(labels(items).includes('autre') && !labels(items).includes('SELECT'), 'pas de mots-clés après FROM');
+  assert.equal(items.find((i) => i.label === 'autre.logs').kind, 'view');
+
+  ({ ctx, refs } = at('SELECT p.| FROM produits p JOIN commandes c ON c.produit_id = p.id'));
+  items = C.complete(ctx, refs, view());
+  assert.deepEqual(labels(items), ['id', 'nom', 'prix'], 'colonnes de produits seulement');
+  assert.match(items[0].detail, /p → produits · integer · clé primaire/);
+
+  ({ ctx, refs } = at('SELECT c.| FROM produits p JOIN commandes c ON 1 = 1'));
+  assert.deepEqual(labels(C.complete(ctx, refs, view())), ['id', 'produit_id']);
+
+  ({ ctx, refs } = at('SELECT commandes.| FROM commandes'));
+  assert.deepEqual(labels(C.complete(ctx, refs, view())), ['id', 'produit_id'], 'nom de table sans alias');
+
+  ({ ctx, refs } = at('SELECT * FROM autre.|'));
+  assert.deepEqual(labels(C.complete(ctx, refs, view())), ['logs']);
+
+  ({ ctx, refs } = at('SELECT autre.logs.| FROM x'));
+  assert.deepEqual(labels(C.complete(ctx, refs, view())), ['msg']);
+
+  ({ ctx, refs } = at('SELECT | FROM produits p, commandes c'));
+  items = C.complete(ctx, refs, view());
+  assert.ok(['id', 'nom', 'produit_id'].every((l) => labels(items).includes(l)));
+  assert.ok(labels(items).includes('SELECT') && labels(items).includes('COUNT(*)'));
+
+  ({ ctx, refs } = at('SELECT * FROM produits WHERE |'));
+  items = C.complete(ctx, refs, view());
+  assert.ok(labels(items).includes('nom') && !labels(items).includes('commandes'), 'pas de tables dans WHERE');
+});
+
+test('propositions : quoting des noms atypiques, MySQL', () => {
+  const v = view({
+    dbType: 'postgres',
+    tables: () => [{ name: 'Mixte Casse', isView: false }, { name: 'simple', isView: false }],
+    columns: () => [col('Col A'), col('col_b')],
+    containers: ['shop'],
+  });
+  let { ctx, refs } = at('SELECT * FROM |');
+  const t = C.complete(ctx, refs, v);
+  assert.equal(t.find((i) => i.label === 'Mixte Casse').insertText, '"Mixte Casse"');
+  assert.equal(t.find((i) => i.label === 'simple').insertText, 'simple');
+  ({ ctx, refs } = at('SELECT x.| FROM simple x'));
+  const c = C.complete(ctx, refs, v);
+  assert.deepEqual(c.map((i) => i.insertText), ['"Col A"', 'col_b']);
+
+  const my = { ...v, dbType: 'mysql', containers: ['d1', 'd2'], defaultContainer: 'd1', tables: (c) => [{ name: 'T-1', isView: false }] };
+  ({ ctx, refs } = at('SELECT * FROM |', 'mysql'));
+  const mt = C.complete(ctx, refs, my);
+  assert.equal(mt.find((i) => i.label === 'T-1').insertText, '`T-1`');
+  assert.equal(mt.find((i) => i.label === 'd2.T-1').insertText, 'd2.`T-1`');
+});
+
+test('tablesNeeded : colonnes à charger avant de répondre', () => {
+  let { ctx, refs } = at('SELECT p.| FROM produits p JOIN commandes c ON 1=1');
+  assert.deepEqual(C.tablesNeeded(ctx, refs, view()), [{ container: 'shop', table: 'produits' }]);
+  ({ ctx, refs } = at('SELECT | FROM produits p JOIN autre.logs ON 1=1'));
+  assert.deepEqual(C.tablesNeeded(ctx, refs, view()),
+    [{ container: 'shop', table: 'produits' }, { container: 'autre', table: 'logs' }]);
+  ({ ctx, refs } = at('SELECT * FROM |'));
+  assert.deepEqual(C.tablesNeeded(ctx, refs, view()), []);
+  ({ ctx, refs } = at('SELECT | FROM inconnue'));
+  assert.deepEqual(C.tablesNeeded(ctx, refs, view()), []);
+});
+
+test('historique : récent en premier, doublon remonté, borné, vide ignoré', async () => {
+  const mem = {};
+  const store = { get: (k, d) => mem[k] ?? d, update: async (k, v) => { mem[k] = v; } };
+  let t = 1000;
+  const h = new QueryHistory(store, () => ++t);
+  await h.add({ sql: 'SELECT 1', connectionId: 'a', connectionName: 'A', ok: true });
+  await h.add({ sql: '  ', connectionId: 'a', connectionName: 'A', ok: true });
+  await h.add({ sql: 'SELECT 2', connectionId: 'a', connectionName: 'A', ok: false });
+  await h.add({ sql: 'SELECT 1', connectionId: 'b', connectionName: 'B', ok: true });
+  await h.add({ sql: ' SELECT 1 ', connectionId: 'a', connectionName: 'A', ok: true });
+  assert.deepEqual(h.list().map((e) => `${e.connectionId}:${e.sql}`), ['a:SELECT 1', 'b:SELECT 1', 'a:SELECT 2']);
+  assert.equal(h.list()[0].at, 1004, 'horodatage de la dernière exécution');
+  for (let i = 0; i < MAX_HISTORY + 20; i++) {
+    await h.add({ sql: 'SELECT ' + (100 + i), connectionId: 'a', connectionName: 'A', ok: true });
+  }
+  assert.equal(h.list().length, MAX_HISTORY);
+  assert.equal(h.list()[0].sql, 'SELECT ' + (100 + MAX_HISTORY + 19));
+  await h.clear();
+  assert.deepEqual(h.list(), []);
+});
+
+test('cache du schéma : une seule lecture, rechargement après expiration ou invalidation', async () => {
+  let calls = 0; let now = 0; let colCalls = 0;
+  const driver = {
+    listContainers: async () => { calls++; await new Promise((r) => setTimeout(r, 10)); return ['s']; },
+    listTables: async () => [{ name: 't', isView: false }],
+    listColumns: async () => { colCalls++; return [col('a')]; },
+  };
+  const cache = new SchemaCache(async () => driver, () => now);
+  const cfg = { id: 'c1', type: 'postgres' };
+  await Promise.all([cache.load('c1'), cache.load('c1'), cache.load('c1')]);
+  assert.equal(calls, 1, 'chargements simultanés regroupés');
+  await cache.load('c1');
+  assert.equal(calls, 1);
+  assert.deepEqual(cache.view('c1', cfg).containers, ['s']);
+  assert.equal(cache.view('c1', cfg).tables('s').length, 1);
+  assert.equal(cache.view('c1', cfg).defaultContainer, 'public');
+  assert.equal(cache.view('c1', cfg).columns('s', 't'), undefined);
+  await cache.loadColumns('c1', 's', 't'); await cache.loadColumns('c1', 's', 't');
+  assert.equal(colCalls, 1);
+  assert.equal(cache.view('c1', cfg).columns('s', 't').length, 1);
+  now = 6 * 60 * 1000;
+  assert.deepEqual(cache.view('c1', cfg).containers, [], 'expiré');
+  await cache.load('c1');
+  assert.equal(calls, 2);
+  cache.invalidate('c1');
+  assert.deepEqual(cache.view('c1', cfg).containers, []);
+  assert.equal(cache.view('c1', cfg).columns('s', 't'), undefined);
+});

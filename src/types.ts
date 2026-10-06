@@ -1,3 +1,5 @@
+import { CancelToken } from './util';
+
 export type DbType = 'mysql' | 'postgres';
 
 export interface ConnectionConfig {
@@ -45,6 +47,8 @@ export interface QueryResult {
   /** Vrai si rows a été tronqué à dbExplorer.maxRows. */
   truncated: boolean;
   durationMs: number;
+  /** Nombre d'instructions exécutées quand un script a été découpé (MySQL). */
+  statements?: number;
 }
 
 export interface WriteStatement {
@@ -60,7 +64,13 @@ export interface DbDriver {
   listContainers(): Promise<string[]>;
   listTables(container: string): Promise<TableInfo[]>;
   listColumns(container: string, table: string): Promise<ColumnInfo[]>;
-  query(sql: string, params?: unknown[]): Promise<QueryResult>;
+  query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult>;
+  /**
+   * Exécute plusieurs instructions l'une après l'autre sur UNE connexion (variables, tables
+   * temporaires et transactions restent visibles d'une instruction à l'autre) ; renvoie le
+   * résultat de la dernière. Absent pour PostgreSQL, qui accepte déjà plusieurs instructions.
+   */
+  script?(statements: string[], cancel?: CancelToken): Promise<QueryResult>;
   /**
    * Exécute les instructions dans une transaction (tout ou rien) et retourne,
    * pour chacune, le nombre de lignes affectées.

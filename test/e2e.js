@@ -845,6 +845,90 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   await db(`UPDATE ${T('pag')} SET ${q('txt')} = ${KIND === 'pg' ? '$1' : '?'} WHERE ${q('id')} = 1`, [nomAvant]);
   ok('production : insertion et suppression confirmées, message de suppression marqué PRODUCTION');
 
+
+  // ================================================================ ÉDITEUR : annulation et scripts
+  console.log('Annulation et scripts');
+  const { CancelToken } = require('../.test-build/util.js');
+  const heavy = KIND === 'pg'
+    ? 'SELECT pg_sleep(60)'
+    : 'SELECT COUNT(*) FROM information_schema.columns a, information_schema.columns b, information_schema.columns c, information_schema.columns d';
+  const tk = new CancelToken();
+  const t0c = Date.now();
+  const pending = driver.query(heavy, undefined, tk).then(() => 'terminée', (e) => e);
+  await tick(500);
+  await tk.cancel();
+  const outcome = await Promise.race([pending, new Promise((r) => setTimeout(() => r('TROP LONG'), 15000))]);
+  assert.notEqual(outcome, 'TROP LONG', 'la requête aurait dû être interrompue');
+  assert.notEqual(outcome, 'terminée');
+  assert.ok(Date.now() - t0c < 12000, 'interrompue rapidement');
+  assert.ok(/cancel|interrupt|57014|1317/i.test(String(outcome.message) + String(outcome.code)), String(outcome.message));
+  assert.equal(tk.requested, true);
+  ok('requête longue interrompue côté serveur', `${Date.now() - t0c} ms — ${String(outcome.message).slice(0, 60)}`);
+
+  // annulation demandée AVANT le démarrage effectif : la requête est quand même interrompue
+  const early = new CancelToken();
+  const p2 = driver.query(heavy, undefined, early).then(() => 'terminée', (e) => e);
+  await early.cancel();
+  const o2 = await Promise.race([p2, new Promise((r) => setTimeout(() => r('TROP LONG'), 15000))]);
+  assert.notEqual(o2, 'TROP LONG'); assert.notEqual(o2, 'terminée');
+  ok('annulation demandée aussitôt après l\'envoi : prise en compte');
+
+  // le pilote reste utilisable ; une requête normale avec jeton ne fuit pas d'annulation
+  const tk3 = new CancelToken();
+  const quick = await driver.query('SELECT 1', undefined, tk3);
+  assert.equal(quick.rows[0][0], '1');
+  await tk3.cancel();                                   // trop tard : sans effet
+  assert.equal((await driver.query('SELECT 2')).rows[0][0], '2');
+  ok('annulation tardive (requête déjà terminée) : sans effet sur les requêtes suivantes');
+
+  if (KIND === 'my') {
+    assert.equal(typeof driver.script, 'function');
+    const res = await driver.script([
+      'CREATE TEMPORARY TABLE shop.tmp_script (a INT)',
+      'INSERT INTO shop.tmp_script VALUES (1), (2), (3)',
+      'SELECT SUM(a) AS total FROM shop.tmp_script',
+    ]);
+    assert.deepEqual(res.columns, ['total']);
+    assert.equal(res.rows[0][0], '6');
+    assert.equal(res.statements, 3);
+    ok('MariaDB : script de 3 instructions sur UNE connexion (table temporaire visible), résultat de la dernière', `total = ${res.rows[0][0]}`);
+
+    // transaction explicite à l'intérieur d'un script
+    const before = await count('lignes');
+    await driver.script([
+      'START TRANSACTION',
+      `INSERT INTO ${T('lignes')} VALUES (50, 1, 1)`,
+      'ROLLBACK',
+    ]);
+    assert.equal(await count('lignes'), before, 'ROLLBACK appliqué à la même connexion');
+    ok('MariaDB : START TRANSACTION … ROLLBACK dans un script : annulé comme attendu');
+
+    // erreur au milieu : numéro de l'instruction, les précédentes restent appliquées
+    await assert.rejects(
+      driver.script([`INSERT INTO ${T('lignes')} VALUES (51, 1, 1)`, 'SELECT * FROM table_inexistante', 'SELECT 1']),
+      (e) => /Instruction 2\/3/.test(e.message) && /1 instruction\(s\) précédente\(s\) ont déjà été exécutées/.test(e.message),
+    );
+    assert.ok(await row('lignes', `${q('cmd')} = 51`), 'la 1re instruction (autocommit) est bien appliquée, et signalée');
+    await db(`DELETE FROM ${T('lignes')} WHERE ${q('cmd')} = 51`);
+    ok('MariaDB : erreur à l\'instruction 2/3 signalée avec la mention des instructions déjà exécutées');
+
+    // annulation au milieu d'un script
+    const ts = new CancelToken();
+    const ps = driver.script(['SELECT 1', heavy, `INSERT INTO ${T('lignes')} VALUES (52, 1, 1)`], ts).then(() => 'terminé', (e) => e);
+    await tick(500); await ts.cancel();
+    const os = await Promise.race([ps, new Promise((r) => setTimeout(() => r('TROP LONG'), 15000))]);
+    assert.notEqual(os, 'TROP LONG'); assert.notEqual(os, 'terminé');
+    assert.equal(await row('lignes', `${q('cmd')} = 52`), undefined, 'les instructions suivantes ne sont pas exécutées');
+    ok('MariaDB : annulation d\'un script en cours, instructions restantes abandonnées');
+  } else {
+    // PostgreSQL : plusieurs instructions dans un seul texte, dernier résultat renvoyé, atomique
+    const res = await driver.query('SELECT 1 AS a; SELECT 2 AS b');
+    assert.deepEqual(res.columns, ['b']);
+    await assert.rejects(driver.query(`INSERT INTO ${T('lignes')} VALUES (60, 1, 1); SELECT * FROM table_inexistante`));
+    assert.equal(await row('lignes', `${q('cmd')} = 60`), undefined, 'texte multi-instructions : tout ou rien');
+    ok('PostgreSQL : plusieurs instructions dans un texte (dernier résultat), exécutées atomiquement');
+  }
+
   console.log(`\n${passed} vérifications OK (${KIND})`);
   await driver.dispose();
 })().catch(async (e) => { console.error('\n✗ ÉCHEC :', e.stack || e.message); try { await driver.dispose(); } catch {} process.exit(1); });

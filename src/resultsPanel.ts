@@ -808,6 +808,9 @@ export class ResultsPanel {
       const cmd = result.command ? `${result.command} · ` : '';
       summary = `${cmd}${plural(result.affectedRows ?? 0, 'ligne affectée', 'lignes affectées')}`;
     }
+    if (result.statements && result.statements > 1) {
+      summary += ` · ${result.statements} instructions exécutées (résultat de la dernière)`;
+    }
     summary += ` · ${result.durationMs} ms`;
 
     this.last = { columns: result.columns, rows: result.rows.map((r) => [...r]) };

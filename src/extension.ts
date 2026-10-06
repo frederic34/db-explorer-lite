@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
 import { ResultsPanel } from './resultsPanel';
-import { assessRun } from './sqlGuard';
+import { registerCompletion } from './completionProvider';
+import { QueryHistory } from './history';
+import { SchemaCache } from './schemaCache';
+import { assessRun, splitStatements } from './sqlGuard';
 import { ConnectionConfig } from './types';
 import {
   ColumnNode,
@@ -11,7 +14,7 @@ import {
   DbNode,
   TableNode,
 } from './treeProvider';
-import { errorMessage, quoteIdent } from './util';
+import { CancelToken, errorMessage, quoteIdent } from './util';
 import { openConnectionForm } from './connectionForm';
 
 let manager: ConnectionManager | undefined;
@@ -21,6 +24,9 @@ export function activate(context: vscode.ExtensionContext): void {
   manager = mgr;
   const tree = new ConnectionsTreeProvider(mgr);
   const results = new ResultsPanel();
+  const history = new QueryHistory(context.globalState);
+  const schema = new SchemaCache((id) => mgr.getDriver(id));
+  const running = new Set<CancelToken>();
 
   /** Connexion associée à chaque éditeur SQL (en mémoire, clé = URI du document). */
   const docConnections = new Map<string, string>();
@@ -46,6 +52,24 @@ export function activate(context: vscode.ExtensionContext): void {
       : undefined;
     status.tooltip = 'DB Explorer : connexion utilisée pour exécuter les requêtes de ce fichier';
     status.show();
+  };
+
+  // --- Requête en cours : indicateur cliquable pour l'annuler -----------------------------
+  const runningItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 89);
+  runningItem.command = 'dbExplorer.cancelQuery';
+  runningItem.text = '$(sync~spin) Requête en cours… (cliquer pour annuler)';
+  runningItem.tooltip = 'DB Explorer : interrompre la requête côté serveur';
+  let runningTimer: NodeJS.Timeout | undefined;
+  const updateRunning = (): void => {
+    void vscode.commands.executeCommand('setContext', 'dbExplorer.queryRunning', running.size > 0);
+    if (running.size === 0) {
+      clearTimeout(runningTimer);
+      runningTimer = undefined;
+      runningItem.hide();
+    } else if (!runningTimer) {
+      // Les requêtes brèves n'affichent rien : l'indicateur n'apparaît qu'après une seconde.
+      runningTimer = setTimeout(() => runningItem.show(), 1000);
+    }
   };
 
   // --- Helpers -------------------------------------------------------------------------
@@ -129,11 +153,28 @@ export function activate(context: vscode.ExtensionContext): void {
         title: `DB Explorer : exécution sur ${cfg.name}…`,
       },
       async () => {
+        const token = new CancelToken();
+        running.add(token);
+        updateRunning();
+        const record = (ok: boolean, ms?: number) =>
+          void history.add({ sql, connectionId, connectionName: cfg.name, ok, ms });
         try {
           const driver = await mgr.getDriver(connectionId);
-          results.showResult(cfg.name, sql, await driver.query(sql), badges);
+          // MySQL n'accepte qu'une instruction par requête : un script est exécuté instruction par
+          // instruction, sur une même connexion.
+          const parts = splitStatements(sql, cfg.type);
+          const result =
+            driver.script && parts.length > 1
+              ? await driver.script(parts, token)
+              : await driver.query(sql, undefined, token);
+          record(true, result.durationMs);
+          results.showResult(cfg.name, sql, result, badges);
         } catch (err) {
-          results.showError(cfg.name, sql, errorMessage(err), badges);
+          record(false);
+          results.showError(cfg.name, sql, token.requested ? 'Requête annulée.' : errorMessage(err), badges);
+        } finally {
+          running.delete(token);
+          updateRunning();
         }
       },
     );
@@ -207,7 +248,55 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    vscode.commands.registerCommand('dbExplorer.refresh', () => tree.refresh()),
+    vscode.commands.registerCommand('dbExplorer.refresh', () => {
+      schema.invalidate();
+      tree.refresh();
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.cancelQuery', async () => {
+      await Promise.all([...running].map((t) => t.cancel()));
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.history', async () => {
+      const entries = history.list();
+      if (entries.length === 0) {
+        vscode.window.showInformationMessage("L'historique des requêtes est vide.");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        entries.map((e) => {
+          const lines = e.sql.split('\n');
+          return {
+            label: `${e.ok ? '$(check)' : '$(error)'} ${lines[0].slice(0, 100)}${lines.length > 1 ? ' …' : ''}`,
+            description: `${e.connectionName} · ${new Date(e.at).toLocaleString('fr-FR')}${e.ms !== undefined ? ` · ${e.ms} ms` : ''}`,
+            detail: lines.length > 1 ? e.sql.replace(/\s+/g, ' ').slice(0, 200) : undefined,
+            entry: e,
+          };
+        }),
+        { placeHolder: "Rechercher dans l'historique…", matchOnDescription: true, matchOnDetail: true },
+      );
+      if (!pick) {
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: pick.entry.sql + '\n' });
+      if (mgr.get(pick.entry.connectionId)) {
+        docConnections.set(doc.uri.toString(), pick.entry.connectionId);
+      }
+      await vscode.window.showTextDocument(doc, { preview: false });
+      updateStatus();
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.clearHistory', async () => {
+      const clear = 'Effacer';
+      const choice = await vscode.window.showWarningMessage(
+        "Effacer tout l'historique des requêtes ?",
+        { modal: true },
+        clear,
+      );
+      if (choice === clear) {
+        await history.clear();
+      }
+    }),
 
     vscode.commands.registerCommand('dbExplorer.newQuery', async (node?: DbNode) => {
       let cfg: ConnectionConfig | undefined;
@@ -292,8 +381,16 @@ export function activate(context: vscode.ExtensionContext): void {
       showCollapseAll: true,
     }),
     status,
+    runningItem,
+    registerCompletion(schema, (doc) => {
+      const id = docConnections.get(doc.uri.toString());
+      return id ? mgr.get(id) : undefined;
+    }),
     vscode.window.onDidChangeActiveTextEditor(updateStatus),
-    mgr.onDidChange(updateStatus),
+    mgr.onDidChange(() => {
+      schema.invalidate();
+      updateStatus();
+    }),
     vscode.workspace.onDidCloseTextDocument((doc) => docConnections.delete(doc.uri.toString())),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('dbExplorer.showSystemSchemas')) {

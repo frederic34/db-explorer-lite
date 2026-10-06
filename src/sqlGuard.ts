@@ -4,6 +4,9 @@ import { DbType } from './types';
 export interface Statement {
   sql: string;
   masked: string;
+  /** Position (dans le texte d'origine) du début de l'instruction et de son « ; » final (ou de la fin du texte). */
+  from: number;
+  to: number;
 }
 
 export type StatementKind = 'read' | 'session' | 'write';
@@ -22,19 +25,30 @@ const isIdentChar = (c: string | undefined): boolean => c !== undefined && /[A-Z
  * identifiants, commentaires et (PostgreSQL) chaînes entre dollars.
  */
 export function parseStatements(sql: string, dbType: DbType): Statement[] {
+  return scanSql(sql, dbType).statements;
+}
+
+/**
+ * Analyse lexicale : instructions, et `unterminated` = le texte se termine à l'intérieur d'une chaîne,
+ * d'un commentaire ou d'une chaîne entre dollars (utile pour savoir si le curseur est dans un littéral).
+ */
+export function scanSql(sql: string, dbType: DbType): { statements: Statement[]; unterminated: boolean } {
   const out: Statement[] = [];
+  let unterminated = false;
+  let segStart = 0;
   let orig = '';
   let masked = '';
   const mysql = dbType === 'mysql';
   const n = sql.length;
   let i = 0;
 
-  const push = () => {
+  const push = (end: number) => {
     if (masked.trim() !== '') {
-      out.push({ sql: orig.trim(), masked: masked.trim() });
+      out.push({ sql: orig.trim(), masked: masked.trim(), from: segStart, to: end });
     }
     orig = '';
     masked = '';
+    segStart = end + 1;
   };
 
   while (i < n) {
@@ -49,6 +63,9 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
       let j = i;
       while (j < n && sql[j] !== '\n') {
         j++;
+      }
+      if (j >= n) {
+        unterminated = true;
       }
       orig += sql.slice(i, j);
       masked += ' ';
@@ -69,6 +86,9 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
         } else {
           j++;
         }
+      }
+      if (depth > 0) {
+        unterminated = true;
       }
       orig += sql.slice(i, j);
       masked += ' ';
@@ -93,6 +113,9 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
         }
         j++;
       }
+      if (j >= n) {
+        unterminated = true;
+      }
       j = Math.min(n, j + 1);
       orig += sql.slice(i, j);
       masked += c === "'" ? "''" : c === '"' ? '""' : 'x';
@@ -104,6 +127,9 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
       const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
       if (m) {
         const close = sql.indexOf(m[0], i + m[0].length);
+        if (close === -1) {
+          unterminated = true;
+        }
         const j = close === -1 ? n : close + m[0].length;
         orig += sql.slice(i, j);
         masked += "''";
@@ -112,7 +138,7 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
       }
     }
     if (c === ';') {
-      push();
+      push(i);
       i++;
       continue;
     }
@@ -120,8 +146,8 @@ export function parseStatements(sql: string, dbType: DbType): Statement[] {
     masked += c;
     i++;
   }
-  push();
-  return out;
+  push(n);
+  return { statements: out, unterminated };
 }
 
 /** Séparation en instructions (texte d'origine). */

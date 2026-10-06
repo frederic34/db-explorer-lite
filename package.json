@@ -95,6 +95,23 @@
         "command": "dbExplorer.copyName",
         "title": "Copier le nom",
         "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.history",
+        "title": "Historique des requêtes",
+        "category": "DB Explorer",
+        "icon": "$(history)"
+      },
+      {
+        "command": "dbExplorer.clearHistory",
+        "title": "Effacer l'historique des requêtes",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.cancelQuery",
+        "title": "Annuler la requête en cours",
+        "category": "DB Explorer",
+        "icon": "$(debug-stop)"
       }
     ],
     "menus": {
@@ -154,6 +171,16 @@
           "command": "dbExplorer.runQuery",
           "when": "editorLangId == sql",
           "group": "navigation"
+        },
+        {
+          "command": "dbExplorer.history",
+          "when": "editorLangId == sql",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dbExplorer.cancelQuery",
+          "when": "editorLangId == sql && dbExplorer.queryRunning",
+          "group": "navigation@0"
         }
       ],
       "commandPalette": [
@@ -180,6 +207,10 @@
         {
           "command": "dbExplorer.selectConnection",
           "when": "editorLangId == sql"
+        },
+        {
+          "command": "dbExplorer.cancelQuery",
+          "when": "dbExplorer.queryRunning"
         }
       ]
     },

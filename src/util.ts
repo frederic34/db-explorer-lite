@@ -18,3 +18,29 @@ export function quoteIdent(type: DbType, name: string): string {
     ? '`' + name.replace(/`/g, '``') + '`'
     : '"' + name.replace(/"/g, '""') + '"';
 }
+
+/**
+ * Annulation d'une requête en cours : le pilote y attache l'action qui interrompt la requête
+ * côté serveur (pg_cancel_backend, KILL QUERY). Demander l'annulation avant ou après le démarrage
+ * est sans danger.
+ */
+export class CancelToken {
+  requested = false;
+  private action?: () => Promise<void>;
+
+  attach(action: () => Promise<void>): void {
+    this.action = action;
+    if (this.requested) {
+      void action().catch(() => undefined);
+    }
+  }
+
+  detach(): void {
+    this.action = undefined;
+  }
+
+  async cancel(): Promise<void> {
+    this.requested = true;
+    await this.action?.().catch(() => undefined);
+  }
+}
