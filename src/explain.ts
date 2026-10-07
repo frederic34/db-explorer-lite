@@ -1,4 +1,5 @@
 import { DbType, QueryResult } from './types';
+import { t } from './i18n';
 
 export interface ExplainPlan {
   /** Instruction à exécuter, puis variante à essayer si la première est refusée (MariaDB : ANALYZE). */
@@ -37,11 +38,11 @@ const num = (v: unknown): string => (typeof v === 'number' ? String(Math.round(v
 
 function pgRows(node: PgNode, depth: number, analyze: boolean, out: (string | null)[][]): void {
   const type = String(node['Node Type'] ?? '?');
-  const rel = node['Relation Name'] ? ` sur ${node['Relation Name']}` : '';
+  const rel = node['Relation Name'] ? ` ${t('sur', 'on')} ${node['Relation Name']}` : '';
   const idx = node['Index Name'] ? ` (${node['Index Name']})` : '';
   const notes: string[] = [];
   if (type === 'Seq Scan' && !(typeof node['Rows Removed by Filter'] === 'number' && node['Rows Removed by Filter'] === 0)) {
-    notes.push('⚠ parcours séquentiel');
+    notes.push(t('⚠ parcours séquentiel', '⚠ sequential scan'));
   }
   for (const k of ['Join Type', 'Index Cond', 'Hash Cond', 'Merge Cond', 'Filter', 'Sort Key', 'Group Key']) {
     const v = node[k];
@@ -50,7 +51,7 @@ function pgRows(node: PgNode, depth: number, analyze: boolean, out: (string | nu
     }
   }
   if (typeof node['Rows Removed by Filter'] === 'number') {
-    notes.push(`${node['Rows Removed by Filter']} ligne(s) écartée(s) par le filtre`);
+    notes.push(t(`${node['Rows Removed by Filter']} ligne(s) écartée(s) par le filtre`, `${node['Rows Removed by Filter']} row(s) removed by filter`));
   }
   const row: (string | null)[] = [
     indent(depth) + type + rel + idx,
@@ -77,14 +78,14 @@ export function planToResult(dbType: DbType, raw: QueryResult, analyze: boolean)
       const parsed = JSON.parse(raw.rows[0][0] as string) as { Plan: PgNode; 'Planning Time'?: number; 'Execution Time'?: number }[];
       const rows: (string | null)[][] = [];
       pgRows(parsed[0].Plan, 0, analyze, rows);
-      const cols = ['Étape', 'Coût estimé', 'Lignes est.'];
+      const cols = [t('Étape', 'Step'), t('Coût estimé', 'Estimated cost'), t('Lignes est.', 'Est. rows')];
       if (analyze) {
-        cols.push('Temps (ms/boucle)', 'Lignes réelles', 'Boucles');
+        cols.push(t('Temps (ms/boucle)', 'Time (ms/loop)'), t('Lignes réelles', 'Actual rows'), t('Boucles', 'Loops'));
       }
-      cols.push('Détail');
+      cols.push(t('Détail', 'Detail'));
       if (analyze) {
         const pad = (label: string, ms: unknown) => [label, '', '', num(ms), '', '', ''];
-        rows.push(pad('Planification (ms)', parsed[0]['Planning Time']), pad('Exécution (ms)', parsed[0]['Execution Time']));
+        rows.push(pad(t('Planification (ms)', 'Planning (ms)'), parsed[0]['Planning Time']), pad(t('Exécution (ms)', 'Execution (ms)'), parsed[0]['Execution Time']));
       }
       return done(cols, rows);
     } catch {
@@ -99,9 +100,9 @@ export function planToResult(dbType: DbType, raw: QueryResult, analyze: boolean)
       depth.set(String(r[0]), d);
       const detail = String(r[3] ?? '');
       const full = /^SCAN\b/i.test(detail) && !/USING\b/i.test(detail);
-      return [indent(d) + detail, full ? '⚠ parcours complet de la table' : ''];
+      return [indent(d) + detail, full ? t('⚠ parcours complet de la table', '⚠ full table scan') : ''];
     });
-    return done(['Étape', 'Remarque'], rows);
+    return done([t('Étape', 'Step'), t('Remarque', 'Note')], rows);
   }
 
   // MySQL 8 : EXPLAIN ANALYZE renvoie un arbre en texte dans une seule cellule.

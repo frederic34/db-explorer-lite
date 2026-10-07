@@ -7,6 +7,7 @@ import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import { RawSet, SQLITE_MAX_BYTES, WorkerData, WorkerRequest, WorkerResponse } from './sqliteShared';
 
 const data = workerData as WorkerData;
+const tw = (fr: string, en: string): string => (data.fr === false ? en : fr);
 let SQL: Promise<SqlJsStatic> | undefined;
 let db: Database | undefined;
 let stamp = '';
@@ -23,20 +24,28 @@ function engine(): Promise<SqlJsStatic> {
 async function open(): Promise<Database> {
   const file = data.file;
   if (!file) {
-    throw new Error('Aucun fichier SQLite indiqué.');
+    throw new Error(tw('Aucun fichier SQLite indiqué.', 'No SQLite file specified.'));
   }
   let st: fs.Stats;
   try {
     st = fs.statSync(file);
   } catch (err) {
-    throw new Error(`Fichier introuvable ou illisible : ${file} (${(err as NodeJS.ErrnoException).code ?? 'erreur'})`);
+    throw new Error(
+      tw(
+        `Fichier introuvable ou illisible : ${file} (${(err as NodeJS.ErrnoException).code ?? 'erreur'})`,
+        `File not found or unreadable: ${file} (${(err as NodeJS.ErrnoException).code ?? 'error'})`,
+      ),
+    );
   }
   if (!st.isFile()) {
-    throw new Error(`Ce n'est pas un fichier : ${file}`);
+    throw new Error(tw(`Ce n'est pas un fichier : ${file}`, `Not a file: ${file}`));
   }
   if (st.size > SQLITE_MAX_BYTES) {
     throw new Error(
-      `Fichier trop volumineux (${Math.round(st.size / 1048576)} Mo) : la limite est de ${SQLITE_MAX_BYTES / 1048576} Mo, le fichier est chargé en mémoire.`,
+      tw(
+        `Fichier trop volumineux (${Math.round(st.size / 1048576)} Mo) : la limite est de ${SQLITE_MAX_BYTES / 1048576} Mo, le fichier est chargé en mémoire.`,
+        `File too large (${Math.round(st.size / 1048576)} MB): the limit is ${SQLITE_MAX_BYTES / 1048576} MB, the file is loaded into memory.`,
+      ),
     );
   }
   const now = `${st.mtimeMs}:${st.size}`;
@@ -53,7 +62,12 @@ async function open(): Promise<Database> {
     fresh.exec('SELECT count(*) FROM sqlite_master'); // échoue si ce n'est pas une base SQLite
   } catch (err) {
     fresh.close();
-    throw new Error(`Ce fichier n'est pas une base SQLite valide : ${(err as Error).message}`);
+    throw new Error(
+      tw(
+        `Ce fichier n'est pas une base SQLite valide : ${(err as Error).message}`,
+        `This file is not a valid SQLite database: ${(err as Error).message}`,
+      ),
+    );
   }
   db = fresh;
   stamp = now;

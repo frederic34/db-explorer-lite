@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
 import { ColumnInfo, ConnectionConfig, TableInfo } from './types';
 import { errorMessage } from './util';
+import { t as tr } from './i18n';
 
 /** Dossier de connexions. */
 export class GroupNode extends vscode.TreeItem {
@@ -23,7 +24,7 @@ export class ConnectionNode extends vscode.TreeItem {
     this.iconPath = config.production
       ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('charts.red'))
       : new vscode.ThemeIcon(config.readOnly ? 'lock' : 'server');
-    const flags = [config.production ? 'PROD' : '', config.readOnly ? 'lecture seule' : '', config.ssh ? 'SSH' : ''].filter(Boolean);
+    const flags = [config.production ? 'PROD' : '', config.readOnly ? tr('lecture seule', 'read-only') : '', config.ssh ? 'SSH' : ''].filter(Boolean);
     this.description =
       (config.type === 'sqlite'
         ? `SQLite · ${config.file ?? ''}`
@@ -33,9 +34,9 @@ export class ConnectionNode extends vscode.TreeItem {
       (config.type === 'sqlite'
         ? (config.file ?? '')
         : `${config.user}@${config.host}:${config.port}${config.database ? '/' + config.database : ''}`) +
-      (config.production ? '\nBase de production : confirmation avant écriture' : '') +
-      (config.readOnly ? '\nConnexion en lecture seule' : '') +
-      (config.ssh ? `\nTunnel SSH : ${config.ssh.user}@${config.ssh.host}:${config.ssh.port}` : '');
+      (config.production ? tr('\nBase de production : confirmation avant écriture', '\nProduction database: confirmation required before writing') : '') +
+      (config.readOnly ? tr('\nConnexion en lecture seule', '\nRead-only connection') : '') +
+      (config.ssh ? tr(`\nTunnel SSH : ${config.ssh.user}@${config.ssh.host}:${config.ssh.port}`, `\nSSH tunnel: ${config.ssh.user}@${config.ssh.host}:${config.ssh.port}`) : '');
   }
 }
 
@@ -60,7 +61,7 @@ export class TableNode extends vscode.TreeItem {
     super(table.name, vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = table.isView ? 'view' : 'table';
     this.iconPath = new vscode.ThemeIcon(table.isView ? 'eye' : 'table');
-    this.description = table.isView ? 'vue' : undefined;
+    this.description = table.isView ? tr('vue', 'view') : undefined;
   }
 }
 
@@ -73,7 +74,7 @@ export class ColumnNode extends vscode.TreeItem {
     this.tooltip =
       `${column.name} — ${column.type}` +
       (column.nullable ? '' : ' · NOT NULL') +
-      (column.primaryKey ? ' · clé primaire' : '');
+      (column.primaryKey ? tr(' · clé primaire', ' · primary key') : '');
   }
 }
 
@@ -138,7 +139,7 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<DbNode> 
         return columns.map((c) => new ColumnNode(c));
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`DB Explorer : ${errorMessage(err)}`);
+      vscode.window.showErrorMessage(tr(`DB Explorer : ${errorMessage(err)}`, `DB Explorer: ${errorMessage(err)}`));
     }
     return [];
   }

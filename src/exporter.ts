@@ -2,6 +2,7 @@ import { BrowseQuery, buildCountQuery, buildPageQuery } from './browse';
 import { isBinaryLike } from './editing';
 import { DbDriver, DbType } from './types';
 import { quoteIdent } from './util';
+import { t } from './i18n';
 
 /** tsv et md servent à la copie dans le presse-papiers (collage dans un tableur ou dans une documentation). */
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'tsv' | 'md';
@@ -90,7 +91,7 @@ export function csvCell(v: string | null, sep: string): string {
   return v.includes(sep) || /["\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
-const TRUNCATED_BINARY = /^<binaire \d+ octets>$/;
+const TRUNCATED_BINARY = /^<BLOB \d+ B>$/;
 
 /**
  * Littéral SQL d'une cellule. `lost` est incrémenté quand la valeur ne peut pas être restituée
@@ -147,7 +148,7 @@ export class RowFormatter {
   ) {
     this.sep = o.csvSeparator ?? ',';
     if (o.format === 'sql' && (!o.dbType || !o.table)) {
-      throw new Error("L'export en INSERT SQL nécessite le type de base et le nom de la table.");
+      throw new Error(t("L'export en INSERT SQL nécessite le type de base et le nom de la table.", 'SQL INSERT export requires the database type and the table name.'));
     }
   }
 

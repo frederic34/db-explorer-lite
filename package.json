@@ -597,7 +597,7 @@
     "watch": "esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js test/editor.test.js test/saved.test.js test/schemadiff.test.js",
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js test/editor.test.js test/saved.test.js test/schemadiff.test.js test/i18n.test.js",
     "test:integration": "npm run build && node test/integration/runTest.js"
   },
   "dependencies": {

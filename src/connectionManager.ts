@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { createDriver } from './drivers';
 import { openTunnel, Tunnel } from './tunnel';
 import { ConnectionConfig, DbDriver, DriverOptions } from './types';
+import { t } from './i18n';
 
 const STORE_KEY = 'dbExplorer.connections';
 const HOSTS_KEY = 'dbExplorer.sshHosts';
@@ -93,7 +94,7 @@ export class ConnectionManager {
   async renameGroup(from: string, to: string): Promise<void> {
     const name = to.trim();
     if (!name) {
-      throw new Error('Le nom du groupe est vide.');
+      throw new Error(t('Le nom du groupe est vide.', 'The group name is empty.'));
     }
     await this.ctx.globalState.update(
       STORE_KEY,
@@ -139,16 +140,21 @@ export class ConnectionManager {
     }
     if (known[key]) {
       void vscode.window.showErrorMessage(
-        `⚠ L'empreinte du serveur SSH ${key} a changé (attendue ${known[key]}, reçue ${fingerprint}). ` +
-          'Connexion refusée : le serveur a peut-être été réinstallé, ou quelqu\'un se fait passer pour lui. ' +
-          'Si le changement est légitime, utilisez « DB Explorer : Oublier les serveurs SSH approuvés ».',
+        t(
+          `⚠ L'empreinte du serveur SSH ${key} a changé (attendue ${known[key]}, reçue ${fingerprint}). ` +
+            'Connexion refusée : le serveur a peut-être été réinstallé, ou quelqu\'un se fait passer pour lui. ' +
+            'Si le changement est légitime, utilisez « DB Explorer : Oublier les serveurs SSH approuvés ».',
+          `⚠ The fingerprint of SSH server ${key} has changed (expected ${known[key]}, received ${fingerprint}). ` +
+            'Connection refused: the server may have been reinstalled, or someone is impersonating it. ' +
+            'If the change is legitimate, use “DB Explorer: Forget trusted SSH servers”.',
+        ),
       );
       return false;
     }
-    const trust = 'Faire confiance';
+    const trust = t('Faire confiance', 'Trust');
     const choice = await vscode.window.showWarningMessage(
-      `Première connexion au serveur SSH ${key}`,
-      { modal: true, detail: `Empreinte de sa clé :\n${fingerprint}\n\nVérifiez-la auprès de l'administrateur du serveur avant de continuer.` },
+      t(`Première connexion au serveur SSH ${key}`, `First connection to SSH server ${key}`),
+      { modal: true, detail: t(`Empreinte de sa clé :\n${fingerprint}\n\nVérifiez-la auprès de l'administrateur du serveur avant de continuer.`, `Its key fingerprint:\n${fingerprint}\n\nVerify it with the server administrator before continuing.`) },
       trust,
     );
     if (choice !== trust) {
@@ -172,12 +178,12 @@ export class ConnectionManager {
     let privateKey: string | undefined;
     if (ssh.authMethod === 'key') {
       if (!ssh.keyPath) {
-        throw new Error('Aucune clé privée SSH indiquée.');
+        throw new Error(t('Aucune clé privée SSH indiquée.', 'No SSH private key specified.'));
       }
       try {
         privateKey = fs.readFileSync(expandHome(ssh.keyPath), 'utf8');
       } catch (err) {
-        throw new Error(`Clé privée SSH illisible (${ssh.keyPath}) : ${(err as Error).message}`);
+        throw new Error(t(`Clé privée SSH illisible (${ssh.keyPath}) : ${(err as Error).message}`, `Unreadable SSH private key (${ssh.keyPath}): ${(err as Error).message}`));
       }
     }
     const tunnel: Tunnel = await openTunnel(
@@ -225,7 +231,7 @@ export class ConnectionManager {
     }
     const cfg = this.get(id);
     if (!cfg) {
-      throw new Error('Connexion introuvable (supprimée ?).');
+      throw new Error(t('Connexion introuvable (supprimée ?).', 'Connection not found (deleted?).'));
     }
     const p = (async () => {
       const password = (await this.getPassword(id)) ?? '';
@@ -237,7 +243,10 @@ export class ConnectionManager {
           this.drivers.delete(id);
           void driver.dispose();
           void vscode.window.showWarningMessage(
+            t(
             `Tunnel SSH fermé pour « ${cfg.name} »${reason ? ` (${reason})` : ''}. Il sera rétabli à la prochaine requête.`,
+            `SSH tunnel closed for “${cfg.name}”${reason ? ` (${reason})` : ''}. It will be re-established on the next query.`,
+          ),
           );
         }
       });

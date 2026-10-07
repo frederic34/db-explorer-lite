@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import * as net from 'net';
 import { Client } from 'ssh2';
+import { t } from './i18n';
 
 export interface SshOptions {
   host: string;
@@ -44,21 +45,21 @@ function explain(err: Error, o: SshOptions): Error {
   const m = err.message;
   let text = m;
   if (/All configured authentication methods failed/i.test(m)) {
-    text = `Authentification SSH refusée pour « ${o.username} » sur ${o.host}:${o.port} (identifiants ou clé invalides).`;
+    text = t(`Authentification SSH refusée pour « ${o.username} » sur ${o.host}:${o.port} (identifiants ou clé invalides).`, `SSH authentication refused for “${o.username}” on ${o.host}:${o.port} (invalid credentials or key).`);
   } else if (/Timed out while waiting for handshake|ETIMEDOUT/i.test(m)) {
-    text = `Le serveur SSH ${o.host}:${o.port} ne répond pas (délai dépassé).`;
+    text = t(`Le serveur SSH ${o.host}:${o.port} ne répond pas (délai dépassé).`, `SSH server ${o.host}:${o.port} is not responding (timed out).`);
   } else if (/ECONNREFUSED/i.test(m)) {
-    text = `Connexion SSH refusée par ${o.host}:${o.port}.`;
+    text = t(`Connexion SSH refusée par ${o.host}:${o.port}.`, `SSH connection refused by ${o.host}:${o.port}.`);
   } else if (/ENOTFOUND|EAI_AGAIN/i.test(m)) {
-    text = `Hôte SSH introuvable : ${o.host}.`;
+    text = t(`Hôte SSH introuvable : ${o.host}.`, `SSH host not found: ${o.host}.`);
   } else if (/passphrase/i.test(m)) {
-    text = 'La clé privée est chiffrée : saisissez sa phrase secrète (champ « mot de passe SSH »), ou elle est incorrecte.';
+    text = t('La clé privée est chiffrée : saisissez sa phrase secrète (champ « mot de passe SSH »), ou elle est incorrecte.', 'The private key is encrypted: enter its passphrase (“SSH password” field), or it is incorrect.');
   } else if (/Cannot parse privateKey|Unsupported key format/i.test(m)) {
-    text = 'Clé privée illisible ou format non pris en charge (PEM / OpenSSH attendus).';
+    text = t('Clé privée illisible ou format non pris en charge (PEM / OpenSSH attendus).', 'Unreadable private key or unsupported format (PEM / OpenSSH expected).');
   } else if (/Host key rejected|host key|Host denied|verification failed/i.test(m)) {
-    text = 'Connexion SSH annulée : clé du serveur non approuvée.';
+    text = t('Connexion SSH annulée : clé du serveur non approuvée.', 'SSH connection cancelled: server key not trusted.');
   } else if (/No authentication methods available|Not authenticated/i.test(m)) {
-    text = 'Aucune méthode d\'authentification SSH disponible (mot de passe, clé ou agent requis).';
+    text = t('Aucune méthode d\'authentification SSH disponible (mot de passe, clé ou agent requis).', 'No SSH authentication method available (password, key or agent required).');
   }
   return new Error(text);
 }
@@ -102,8 +103,8 @@ export function openTunnel(o: SshOptions, target: { host: string; port: number }
         closeAll(err.message);
       }
     });
-    client.on('close', () => closeAll('connexion SSH fermée'));
-    client.on('end', () => closeAll('connexion SSH terminée'));
+    client.on('close', () => closeAll(t('connexion SSH fermée', 'SSH connection closed')));
+    client.on('end', () => closeAll(t('connexion SSH terminée', 'SSH connection ended')));
 
     client.on('ready', () => {
       server = net.createServer((sock) => {
@@ -132,7 +133,7 @@ export function openTunnel(o: SshOptions, target: { host: string; port: number }
           onClose: (l) => {
             listeners.push(l);
           },
-          close: async () => closeAll('fermé'),
+          close: async () => closeAll(t('fermé', 'closed')),
         });
       });
     });

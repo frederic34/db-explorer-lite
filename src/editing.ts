@@ -1,5 +1,6 @@
 import { ColumnInfo, DbType, WriteStatement } from './types';
 import { quoteIdent } from './util';
+import { t } from './i18n';
 
 /** Colonnes dont la valeur affichée (texte) ne peut pas être réécrite sans risque : binaire, géométrie… */
 const MYSQL_NOT_EDITABLE =
@@ -99,11 +100,11 @@ export function planEditing(
     resultColumns.length === tableColumns.length &&
     resultColumns.every((name, j) => name === tableColumns[j].name);
   if (!same) {
-    return { reason: 'les colonnes du résultat ne correspondent pas à celles de la table' };
+    return { reason: t('les colonnes du résultat ne correspondent pas à celles de la table', 'the result columns do not match the table columns') };
   }
   const pk = tableColumns.flatMap((c, j) => (c.primaryKey ? [j] : []));
   if (pk.length === 0) {
-    return { reason: "cette table n'a pas de clé primaire" };
+    return { reason: t("cette table n'a pas de clé primaire", 'this table has no primary key') };
   }
   return {
     plan: {

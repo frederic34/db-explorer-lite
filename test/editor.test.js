@@ -129,7 +129,7 @@ test('cellView : image reconnue aux octets, taille binaire, URL, valeur longue, 
   assert.equal(cv.sniffImage(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')])).label, 'WebP');
   assert.equal(cv.sniffImage(Buffer.from('<svg onload=alert(1)>')), undefined, 'SVG jamais affiché comme image');
   assert.equal(cv.sniffImage(Buffer.from('MZ\x90\x00')), undefined);
-  assert.equal(cv.binarySize('<binaire 4096 octets>'), 4096);
+  assert.equal(cv.binarySize('<BLOB 4096 B>'), 4096);
   assert.equal(cv.binarySize('0x0102ff'), 3);
   assert.equal(cv.binarySize('0x123'), undefined);
   assert.equal(cv.binarySize('texte'), undefined);

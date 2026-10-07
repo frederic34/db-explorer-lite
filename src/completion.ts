@@ -1,6 +1,7 @@
 import { scanSql } from './sqlGuard';
 import { ColumnInfo, DbType } from './types';
 import { quoteIdent } from './util';
+import { t as tr } from './i18n';
 
 /** Table citée dans une requête (FROM, JOIN, UPDATE, INTO) avec son éventuel alias. */
 export interface TableRef {
@@ -184,7 +185,7 @@ export function complete(ctx: CompletionContext, refs: TableRef[], view: SchemaV
       out.push({
         label: c.name,
         kind: 'column',
-        detail: `${tag ?? target.table} · ${c.type}${c.primaryKey ? ' · clé primaire' : ''}`,
+        detail: `${tag ?? target.table} · ${c.type}${c.primaryKey ? tr(' · clé primaire', ' · primary key') : ''}`,
         insertText: ident(t, c.name),
       });
     }
@@ -194,7 +195,7 @@ export function complete(ctx: CompletionContext, refs: TableRef[], view: SchemaV
       out.push({
         label: qualify ? `${container}.${tb.name}` : tb.name,
         kind: tb.isView ? 'view' : 'table',
-        detail: `${container}${tb.isView ? ' · vue' : ''}`,
+        detail: `${container}${tb.isView ? tr(' · vue', ' · view') : ''}`,
         insertText: (qualify ? ident(t, container) + '.' : '') + ident(t, tb.name),
       });
     }
@@ -221,7 +222,7 @@ export function complete(ctx: CompletionContext, refs: TableRef[], view: SchemaV
   if (TABLE_CLAUSES.has(ctx.clause)) {
     for (const c of view.containers) {
       tablesOf(c, c !== view.defaultContainer);
-      out.push({ label: c, kind: 'schema', detail: t === 'mysql' ? 'base' : 'schéma', insertText: ident(t, c) });
+      out.push({ label: c, kind: 'schema', detail: t === 'mysql' ? tr('base', 'database') : tr('schéma', 'schema'), insertText: ident(t, c) });
     }
     return out;
   }

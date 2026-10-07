@@ -1,4 +1,4 @@
-import { t, webviewI18n } from './i18n';
+import { isFrench, webviewI18n } from './i18n';
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { TableStructure } from './types';
@@ -65,12 +65,12 @@ const SCRIPT = `
   (data.badges || []).forEach(function (b) { h.appendChild(el('span', 'badge' + (b === 'PRODUCTION' ? ' prod' : ''), b)); });
   root.appendChild(h);
   var s = data.structure;
-  root.appendChild(el('div', 'muted', data.connection + (s.isView ? ' · vue' : ' · table')));
+  root.appendChild(el('div', 'muted', data.connection + (s.isView ? T(' · vue', ' · view') : T(' · table', ' · table'))));
 
-  root.appendChild(el('h2', '', 'Colonnes (' + s.columns.length + ')'));
+  root.appendChild(el('h2', '', T('Colonnes (', 'Columns (') + s.columns.length + ')'));
   var hasComment = s.columns.some(function (c) { return c.comment; });
-  var heads = ['#', 'Nom', 'Type', 'Clé primaire', 'Obligatoire', 'Défaut', 'Particularité'];
-  if (hasComment) { heads.push('Commentaire'); }
+  var heads = ['#', T('Nom', 'Name'), 'Type', T('Clé primaire', 'Primary key'), T('Obligatoire', 'Required'), T('Défaut', 'Default'), T('Particularité', 'Extra')];
+  if (hasComment) { heads.push(T('Commentaire', 'Comment')); }
   root.appendChild(table(heads, s.columns.map(function (c, i) {
     var r = [i + 1, c.name, c.type, c.primaryKey, !c.nullable, c.default, c.extra || null];
     if (hasComment) { r.push(c.comment || null); }
@@ -78,27 +78,27 @@ const SCRIPT = `
   }), ['', '', '', '', '', 'def', '', 'com']));
 
   root.appendChild(el('h2', '', 'Index (' + s.indexes.length + ')'));
-  if (s.indexes.length === 0) { root.appendChild(el('div', 'muted', 'Aucun index.')); }
+  if (s.indexes.length === 0) { root.appendChild(el('div', 'muted', T('Aucun index.', 'No indexes.'))); }
   else {
-    root.appendChild(table(['Nom', 'Colonnes', 'Unique', 'Clé primaire', 'Type'], s.indexes.map(function (x) {
+    root.appendChild(table([T('Nom', 'Name'), T('Colonnes', 'Columns'), 'Unique', T('Clé primaire', 'Primary key'), 'Type'], s.indexes.map(function (x) {
       return [x.name, x.columns.join(', '), x.unique, x.primary, x.method || null];
     })));
   }
 
-  root.appendChild(el('h2', '', 'Contraintes (' + s.constraints.length + ')'));
-  if (s.constraints.length === 0) { root.appendChild(el('div', 'muted', 'Aucune contrainte.')); }
+  root.appendChild(el('h2', '', T('Contraintes (', 'Constraints (') + s.constraints.length + ')'));
+  if (s.constraints.length === 0) { root.appendChild(el('div', 'muted', T('Aucune contrainte.', 'No constraints.'))); }
   else {
-    root.appendChild(table(['Nom', 'Type', 'Définition'], s.constraints.map(function (k) { return [k.name, k.kind, k.definition]; }), ['', '', 'def']));
+    root.appendChild(table([T('Nom', 'Name'), 'Type', T('Définition', 'Definition')], s.constraints.map(function (k) { return [k.name, k.kind, k.definition]; }), ['', '', 'def']));
   }
 
   root.appendChild(el('h2', '', 'DDL'));
   root.appendChild(el('pre', '', s.ddl));
   var bar = el('div', 'bar');
-  var copy = el('button', '', 'Copier le DDL');
-  var open = el('button', '', 'Ouvrir dans un éditeur SQL');
+  var copy = el('button', '', T('Copier le DDL', 'Copy DDL'));
+  var open = el('button', '', T('Ouvrir dans un éditeur SQL', 'Open in a SQL editor'));
   var done = el('span', '');
   done.id = 'done';
-  copy.addEventListener('click', function () { vscode.postMessage({ type: 'copy' }); done.textContent = 'Copié.'; setTimeout(function () { done.textContent = ''; }, 2000); });
+  copy.addEventListener('click', function () { vscode.postMessage({ type: 'copy' }); done.textContent = T('Copié.', 'Copied.'); setTimeout(function () { done.textContent = ''; }, 2000); });
   open.addEventListener('click', function () { vscode.postMessage({ type: 'openSql' }); });
   bar.appendChild(copy); bar.appendChild(open); bar.appendChild(done);
   root.appendChild(bar);
@@ -108,7 +108,7 @@ const SCRIPT = `
 export function buildStructureHtml(payload: StructurePayload, nonce: string): string {
   const data = JSON.stringify(payload).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="${isFrench() ? 'fr' : 'en'}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">

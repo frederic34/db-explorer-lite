@@ -19,13 +19,18 @@ import {
 } from './types';
 import { RawSet, SQLITE_MAX_BYTES, WorkerData, WorkerRequest, WorkerResponse } from './sqliteShared';
 import { CancelToken, quoteIdent, repeatUntilDone } from './util';
+import { isFrench, t } from './i18n';
 
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
 function mismatch(actual: number, expected: number): Error {
   return new Error(
-    `Opération annulée : ${actual} ligne(s) affectée(s) au lieu de ${expected} attendue(s). ` +
-      'Les données ont peut-être été modifiées entre-temps ; actualisez l\'aperçu.',
+    t(
+      `Opération annulée : ${actual} ligne(s) affectée(s) au lieu de ${expected} attendue(s). ` +
+        'Les données ont peut-être été modifiées entre-temps ; actualisez l\'aperçu.',
+      `Operation cancelled: ${actual} row(s) affected instead of the expected ${expected}. ` +
+        'The data may have been modified in the meantime; refresh the preview.',
+    ),
   );
 }
 
@@ -46,7 +51,7 @@ export function formatCell(value: unknown): string | null {
     return Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString();
   }
   if (Buffer.isBuffer(value)) {
-    return value.length <= 32 ? '0x' + value.toString('hex') : `<binaire ${value.length} octets>`;
+    return value.length <= 32 ? '0x' + value.toString('hex') : `<BLOB ${value.length} B>`;
   }
   try {
     return JSON.stringify(value);
@@ -387,7 +392,7 @@ export class MySqlDriver implements DbDriver {
     let done = false;
     if (cancel.requested) {
       conn.release();
-      throw new Error('Requête annulée.');
+      throw new Error(t('Requête annulée.', 'Query cancelled.'));
     }
     cancel.attach(this.killer(conn.threadId, () => done));
     try {
@@ -409,7 +414,7 @@ export class MySqlDriver implements DbDriver {
     let done = false;
     if (cancel?.requested) {
       conn.release();
-      throw new Error('Requête annulée.');
+      throw new Error(t('Requête annulée.', 'Query cancelled.'));
     }
     cancel?.attach(this.killer(conn.threadId, () => done));
     let last: QueryResult | undefined;
@@ -419,7 +424,7 @@ export class MySqlDriver implements DbDriver {
       for (const sql of statements) {
         index++;
         if (cancel?.requested) {
-          throw new Error('Requête annulée.');
+          throw new Error(t('Requête annulée.', 'Query cancelled.'));
         }
         const s0 = Date.now();
         const [rows, fields] = (await conn.query({ sql, rowsAsArray: true } as mysql.QueryOptions)) as unknown as [
@@ -432,8 +437,10 @@ export class MySqlDriver implements DbDriver {
     } catch (err) {
       if (statements.length > 1 && !cancel?.requested) {
         const e = err as Error;
-        e.message = `Instruction ${index}/${statements.length} : ${e.message}` +
-          (index > 1 ? `\n(les ${index - 1} instruction(s) précédente(s) ont déjà été exécutées)` : '');
+        e.message = t(`Instruction ${index}/${statements.length} : ${e.message}`, `Statement ${index}/${statements.length}: ${e.message}`) +
+          (index > 1
+            ? t(`\n(les ${index - 1} instruction(s) précédente(s) ont déjà été exécutées)`, `\n(the ${index - 1} previous statement(s) have already been executed)`)
+            : '');
       }
       throw err;
     } finally {
@@ -526,7 +533,7 @@ export class PostgresDriver implements DbDriver {
       [container, table],
     );
     if (kind.length === 0) {
-      throw new Error(`Table ou vue introuvable : ${container}.${table}`);
+      throw new Error(t(`Table ou vue introuvable : ${container}.${table}`, `Table or view not found: ${container}.${table}`));
     }
     const relkind = String(kind[0][0]);
     const isView = relkind === 'v' || relkind === 'm';
@@ -733,7 +740,7 @@ export class PostgresDriver implements DbDriver {
       let done = false;
       if (cancel.requested) {
         client.release();
-        throw new Error('Requête annulée.');
+        throw new Error(t('Requête annulée.', 'Query cancelled.'));
       }
       cancel.attach(async () =>
         repeatUntilDone(() => this.pool.query('SELECT pg_cancel_backend($1)', [pid]), () => done),
@@ -786,13 +793,13 @@ export class PostgresDriver implements DbDriver {
 export { SQLITE_MAX_BYTES };
 
 const readOnlyError = (): Error =>
-  new Error('Les bases SQLite sont ouvertes en lecture seule : aucune écriture possible.');
+  new Error(t('Les bases SQLite sont ouvertes en lecture seule : aucune écriture possible.', 'SQLite databases are opened read-only: writing is not possible.'));
 
 /** Premier de ces chemins qui existe : fichier installé avec l'extension (dist/) ou, en développement, node_modules. */
 function findFile(...candidates: string[]): string {
   const found = candidates.find((f) => fs.existsSync(f));
   if (!found) {
-    throw new Error(`Moteur SQLite introuvable (${path.basename(candidates[0])} manquant).`);
+    throw new Error(t(`Moteur SQLite introuvable (${path.basename(candidates[0])} manquant).`, `SQLite engine not found (${path.basename(candidates[0])} is missing).`));
   }
   return found;
 }
@@ -825,6 +832,7 @@ export class SqliteDriver implements DbDriver {
     }
     const data: WorkerData = {
       file: this.cfg.file ?? '',
+      fr: isFrench(),
       wasmPath: findFile(
         path.join(__dirname, 'sql-wasm.wasm'),
         path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
@@ -845,7 +853,7 @@ export class SqliteDriver implements DbDriver {
       }
     });
     worker.on('error', (err) => this.drop(worker, err));
-    worker.on('exit', () => this.drop(worker, new Error("Le moteur SQLite s'est arrêté.")));
+    worker.on('exit', () => this.drop(worker, new Error(t("Le moteur SQLite s'est arrêté.", 'The SQLite engine has stopped.'))));
     // Après les écouteurs : en ajouter un re-référence le thread. Un pilote oublié ne doit pas retenir le processus.
     worker.unref();
     this.worker = worker;
@@ -874,7 +882,7 @@ export class SqliteDriver implements DbDriver {
 
   private call<T>(req: DistributiveOmit<WorkerRequest, 'id'>, cancel?: CancelToken): Promise<T> {
     if (cancel?.requested) {
-      return Promise.reject(new Error('Requête annulée.'));
+      return Promise.reject(new Error(t('Requête annulée.', 'Query cancelled.')));
     }
     const worker = this.start();
     const id = ++this.seq;
@@ -884,7 +892,7 @@ export class SqliteDriver implements DbDriver {
       worker.postMessage({ id, ...req });
       cancel?.attach(async () => {
         void worker.terminate();
-        this.drop(worker, new Error('Requête annulée.'));
+        this.drop(worker, new Error(t('Requête annulée.', 'Query cancelled.')));
       });
     });
     return done.finally(() => cancel?.detach());
@@ -968,7 +976,7 @@ export class SqliteDriver implements DbDriver {
     const q = (n: string) => quoteIdent('sqlite', n);
     const master = await this.rows("SELECT type, sql FROM sqlite_master WHERE name = ? AND type IN ('table','view')", [table]);
     if (master.length === 0) {
-      throw new Error(`Table ou vue introuvable : ${table}`);
+      throw new Error(t(`Table ou vue introuvable : ${table}`, `Table or view not found: ${table}`));
     }
     const isView = master[0][0] === 'view';
     const info = (await this.rows(`PRAGMA table_xinfo(${q(table)})`)).filter((r) => Number(r[6]) !== 1);
@@ -1055,7 +1063,7 @@ export class SqliteDriver implements DbDriver {
   async dispose(): Promise<void> {
     const worker = this.worker;
     if (worker) {
-      this.drop(worker, new Error('Connexion fermée.'));
+      this.drop(worker, new Error(t('Connexion fermée.', 'Connection closed.')));
       await worker.terminate();
     }
   }

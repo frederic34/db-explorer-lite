@@ -6,6 +6,8 @@ export const SQLITE_MAX_BYTES = 300 * 1024 * 1024;
 export interface WorkerData {
   file: string;
   wasmPath: string;
+  /** Interface en français (sinon anglais). */
+  fr?: boolean;
 }
 
 export type WorkerRequest =

@@ -1,5 +1,6 @@
 import { ConstraintInfo, DbType, IndexInfo, StructureColumn, TableStructure } from './types';
 import { quoteIdent } from './util';
+import { t } from './i18n';
 
 export interface Snapshot {
   dbType: DbType;
@@ -114,7 +115,7 @@ class Gen {
     if (this.dbType === 'mysql') {
       let out = `${name} ${c.type}`;
       if (c.extra && /GENERATED|PERSISTENT/i.test(c.extra)) {
-        note.push(`colonne générée « ${c.name} » : expression à recopier à la main`);
+        note.push(t(`colonne générée « ${c.name} » : expression à recopier à la main`, `generated column “${c.name}”: copy the expression by hand`));
       }
       out += c.nullable ? ' NULL' : ' NOT NULL';
       if (c.default !== null) {
@@ -234,11 +235,11 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
   for (const n of creationOrder(onlyA, a.tables, a.container)) {
     const s = a.tables.get(n) as TableStructure;
     if (s.isView) {
-      add(n, 'view', n, 'missing', 'vue absente de B');
-      create.push(`-- Vue « ${n} » à créer (définition de A) :\n${s.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`);
+      add(n, 'view', n, 'missing', t('vue absente de B', 'view missing from B'));
+      create.push(t(`-- Vue « ${n} » à créer (définition de A) :\n${s.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`, `-- View “${n}” to create (definition from A):\n${s.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`));
       continue;
     }
-    add(n, 'table', n, 'missing', `table absente de B (${s.columns.length} colonnes, ${s.indexes.filter((i) => !i.primary).length} index)`);
+    add(n, 'table', n, 'missing', t(`table absente de B (${s.columns.length} colonnes, ${s.indexes.filter((i) => !i.primary).length} index)`, `table missing from B (${s.columns.length} columns, ${s.indexes.filter((i) => !i.primary).length} indexes)`));
     const note: string[] = [];
     const lines = s.columns.map((c) => `  ${g.column(c, note)}`);
     const owned = new Set(s.constraints.map((k) => k.name));
@@ -261,7 +262,7 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
   // --- Tables et vues en trop dans B
   for (const n of onlyB) {
     const s = b.tables.get(n) as TableStructure;
-    add(n, s.isView ? 'view' : 'table', n, 'extra', `${s.isView ? 'vue' : 'table'} absente de A`);
+    add(n, s.isView ? 'view' : 'table', n, 'extra', t(`${s.isView ? 'vue' : 'table'} absente de A`, `${s.isView ? 'view' : 'table'} missing from A`));
     drops.push(`-- DROP ${s.isView ? 'VIEW' : 'TABLE'} ${g.table(n)};`);
   }
 
@@ -271,11 +272,11 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
     const sb = b.tables.get(n) as TableStructure;
     if (sa.isView || sb.isView) {
       if (sa.isView !== sb.isView) {
-        add(n, 'table', n, 'changed', sa.isView ? 'vue dans A, table dans B' : 'table dans A, vue dans B');
-        manual.push(`-- « ${n} » est une ${sa.isView ? 'vue' : 'table'} dans A et une ${sa.isView ? 'table' : 'vue'} dans B : à traiter à la main.`);
+        add(n, 'table', n, 'changed', sa.isView ? t('vue dans A, table dans B', 'view in A, table in B') : t('table dans A, vue dans B', 'table in A, view in B'));
+        manual.push(t(`-- « ${n} » est une ${sa.isView ? 'vue' : 'table'} dans A et une ${sa.isView ? 'table' : 'vue'} dans B : à traiter à la main.`, `-- “${n}” is a ${sa.isView ? 'view' : 'table'} in A and a ${sa.isView ? 'table' : 'view'} in B: handle it by hand.`));
       } else if (normDefinition(sa.ddl, a.container) !== normDefinition(sb.ddl, b.container)) {
-        add(n, 'view', n, 'changed', 'définition de la vue différente');
-        manual.push(`-- Vue « ${n} » : définition différente, reprendre celle de A :\n${sa.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`);
+        add(n, 'view', n, 'changed', t('définition de la vue différente', 'view definition differs'));
+        manual.push(t(`-- Vue « ${n} » : définition différente, reprendre celle de A :\n${sa.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`, `-- View “${n}”: definition differs, reuse the one from A:\n${sa.ddl.split('\n').map((l) => `-- ${l}`).join('\n')}`));
       }
       continue;
     }
@@ -289,7 +290,7 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
     for (const c of sa.columns) {
       const o = cb.get(c.name);
       if (!o) {
-        add(n, 'column', c.name, 'missing', `colonne absente de B (${c.type}${c.nullable ? '' : ', NOT NULL'})`);
+        add(n, 'column', c.name, 'missing', t(`colonne absente de B (${c.type}${c.nullable ? '' : ', NOT NULL'})`, `column missing from B (${c.type}${c.nullable ? '' : ', NOT NULL'})`));
         stmts.push(dbType === 'sqlite' ? `ALTER TABLE ${tn} ADD COLUMN ${g.column(c, note)};` : `ALTER TABLE ${tn} ADD COLUMN ${g.column(c, note)};`);
         continue;
       }
@@ -302,7 +303,7 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
         !/^(virtual|stored)? ?generated$/i.test(c.extra ?? '');
       if (typeDiff) { diffs.push(`type ${o.type} → ${c.type}`); }
       if (nullDiff) { diffs.push(c.nullable ? 'NOT NULL → NULL' : 'NULL → NOT NULL'); }
-      if (defDiff) { diffs.push(`défaut ${o.default ?? '∅'} → ${c.default ?? '∅'}`); }
+      if (defDiff) { diffs.push(t(`défaut ${o.default ?? '∅'} → ${c.default ?? '∅'}`, `default ${o.default ?? '∅'} → ${c.default ?? '∅'}`)); }
       if (extraDiff) { diffs.push(`${o.extra ?? '∅'} → ${c.extra ?? '∅'}`); }
       if (diffs.length === 0) {
         continue;
@@ -315,16 +316,16 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
         if (defDiff) {
           stmts.push(c.default === null ? `ALTER TABLE ${tn} ALTER COLUMN ${col} DROP DEFAULT;` : `ALTER TABLE ${tn} ALTER COLUMN ${col} SET DEFAULT ${c.default};`);
         }
-        if (extraDiff) { stmts.push(`-- colonne « ${c.name} » : identité / génération différente (${o.extra ?? '∅'} → ${c.extra ?? '∅'}), à traiter à la main`); }
+        if (extraDiff) { stmts.push(t(`-- colonne « ${c.name} » : identité / génération différente (${o.extra ?? '∅'} → ${c.extra ?? '∅'}), à traiter à la main`, `-- column “${c.name}”: identity / generation differs (${o.extra ?? '∅'} → ${c.extra ?? '∅'}), handle it by hand`)); }
       } else if (dbType === 'mysql') {
         stmts.push(`ALTER TABLE ${tn} MODIFY COLUMN ${g.column(c, note)};`);
       } else {
-        stmts.push(`-- SQLite ne sait pas modifier la colonne « ${c.name} » (${diffs.join(' ; ')}) : recréer la table.`);
+        stmts.push(t(`-- SQLite ne sait pas modifier la colonne « ${c.name} » (${diffs.join(' ; ')}) : recréer la table.`, `-- SQLite cannot alter column “${c.name}” (${diffs.join(' ; ')}): recreate the table.`));
       }
     }
     for (const c of sb.columns) {
       if (!ca.has(c.name)) {
-        add(n, 'column', c.name, 'extra', 'colonne absente de A');
+        add(n, 'column', c.name, 'extra', t('colonne absente de A', 'column missing from A'));
         stmts.push(`-- ALTER TABLE ${tn} DROP COLUMN ${g.q(c.name)};`);
       }
     }
@@ -337,16 +338,16 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
     for (const [name, ix] of ixA) {
       const o = ixB.get(name);
       if (!o) {
-        add(n, 'index', name, 'missing', `index (${ix.columns.join(', ')})${ix.unique ? ' unique' : ''} absent de B`);
+        add(n, 'index', name, 'missing', t(`index (${ix.columns.join(', ')})${ix.unique ? ' unique' : ''} absent de B`, `${ix.unique ? 'unique ' : ''}index (${ix.columns.join(', ')}) missing from B`));
         stmts.push(g.indexSql(n, ix));
       } else if (o.columns.join() !== ix.columns.join() || o.unique !== ix.unique) {
-        add(n, 'index', name, 'changed', `(${o.columns.join(', ')})${o.unique ? ' unique' : ''} → (${ix.columns.join(', ')})${ix.unique ? ' unique' : ''}`);
+        add(n, 'index', name, 'changed', t(`(${o.columns.join(', ')})${o.unique ? ' unique' : ''} → (${ix.columns.join(', ')})${ix.unique ? ' unique' : ''}`, `(${o.columns.join(', ')})${o.unique ? ' unique' : ''} → (${ix.columns.join(', ')})${ix.unique ? ' unique' : ''}`));
         stmts.push(g.dropIndex(n, name), g.indexSql(n, ix));
       }
     }
     for (const [name, ix] of ixB) {
       if (!ixA.has(name)) {
-        add(n, 'index', name, 'extra', `index (${ix.columns.join(', ')}) absent de A`);
+        add(n, 'index', name, 'extra', t(`index (${ix.columns.join(', ')}) absent de A`, `index (${ix.columns.join(', ')}) missing from A`));
         stmts.push(`-- ${g.dropIndex(n, name)}`);
       }
     }
@@ -357,14 +358,14 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
     for (const [name, k] of kA) {
       const o = kB.get(name);
       if (!o) {
-        add(n, 'constraint', name, 'missing', `${k.kind} ${k.definition} absente de B`);
+        add(n, 'constraint', name, 'missing', t(`${k.kind} ${k.definition} absente de B`, `${k.kind} ${k.definition} missing from B`));
         stmts.push(k.kind === 'PRIMARY KEY' && kB.size > 0 && sb.constraints.some((x) => x.kind === 'PRIMARY KEY')
-          ? `-- clé primaire différente : à traiter à la main`
+          ? t(`-- clé primaire différente : à traiter à la main`, `-- primary key differs: handle it by hand`)
           : g.addConstraint(n, k));
       } else if (o.kind !== k.kind || normDefinition(o.definition, b.container) !== normDefinition(k.definition, a.container)) {
         add(n, 'constraint', name, 'changed', `${o.kind} ${o.definition} → ${k.kind} ${k.definition}`);
         if (k.kind === 'PRIMARY KEY') {
-          stmts.push(`-- clé primaire différente (${o.definition} → ${k.definition}) : à traiter à la main`);
+          stmts.push(t(`-- clé primaire différente (${o.definition} → ${k.definition}) : à traiter à la main`, `-- primary key differs (${o.definition} → ${k.definition}): handle it by hand`));
         } else {
           stmts.push(g.dropConstraint(n, o), g.addConstraint(n, k));
         }
@@ -372,7 +373,7 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
     }
     for (const [name, k] of kB) {
       if (!kA.has(name)) {
-        add(n, 'constraint', name, 'extra', `${k.kind} ${k.definition} absente de A`);
+        add(n, 'constraint', name, 'extra', t(`${k.kind} ${k.definition} absente de A`, `${k.kind} ${k.definition} missing from A`));
         stmts.push(`-- ${g.dropConstraint(n, k)}`);
       }
     }
@@ -383,24 +384,24 @@ export function diffSchemas(a: Snapshot, b: Snapshot): SchemaDiff {
   }
 
   const sections: string[] = [
-    `-- Mise à niveau de « ${b.container} » (B) pour qu'elle corresponde à « ${a.container} » (A).`,
-    '-- Script généré par DB Explorer Lite : à relire avant exécution. Les suppressions sont en commentaire ;',
-    '-- les options de table (moteur, jeu de caractères, tablespace) et les commentaires ne sont pas comparés.',
+    t(`-- Mise à niveau de « ${b.container} » (B) pour qu'elle corresponde à « ${a.container} » (A).`, `-- Upgrade of “${b.container}” (B) to match “${a.container}” (A).`),
+    t('-- Script généré par DB Explorer Lite : à relire avant exécution. Les suppressions sont en commentaire ;', '-- Script generated by DB Explorer Lite: review before running. Drops are commented out;'),
+    t('-- les options de table (moteur, jeu de caractères, tablespace) et les commentaires ne sont pas comparés.', '-- table options (engine, character set, tablespace) and comments are not compared.'),
   ];
   if (create.length) {
-    sections.push('', '-- ===== Tables à créer', create.join('\n\n'));
+    sections.push('', t('-- ===== Tables à créer', '-- ===== Tables to create'), create.join('\n\n'));
   }
   if (alter.length) {
-    sections.push('', '-- ===== Tables à modifier', alter.join('\n\n'));
+    sections.push('', t('-- ===== Tables à modifier', '-- ===== Tables to alter'), alter.join('\n\n'));
   }
   if (manual.length) {
-    sections.push('', '-- ===== À traiter à la main', manual.join('\n'));
+    sections.push('', t('-- ===== À traiter à la main', '-- ===== To handle by hand'), manual.join('\n'));
   }
   if (drops.length) {
-    sections.push('', '-- ===== Objets en trop dans B (suppression non exécutée)', drops.join('\n'));
+    sections.push('', t('-- ===== Objets en trop dans B (suppression non exécutée)', '-- ===== Extra objects in B (drop not executed)'), drops.join('\n'));
   }
   if (items.length === 0) {
-    sections.push('', '-- Aucune différence.');
+    sections.push('', t('-- Aucune différence.', '-- No differences.'));
   }
   return { items, script: sections.join('\n') + '\n' };
 }
@@ -415,7 +416,7 @@ export async function takeSnapshot(
 ): Promise<Snapshot> {
   const list = await driver.listTables(container);
   if (list.length > MAX_COMPARE_TABLES) {
-    throw new Error(`Trop de tables à comparer (${list.length}, maximum ${MAX_COMPARE_TABLES}).`);
+    throw new Error(t(`Trop de tables à comparer (${list.length}, maximum ${MAX_COMPARE_TABLES}).`, `Too many tables to compare (${list.length}, maximum ${MAX_COMPARE_TABLES}).`));
   }
   const tables = new Map<string, TableStructure>();
   let done = 0;

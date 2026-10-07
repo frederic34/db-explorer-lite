@@ -1,4 +1,4 @@
-import { t, webviewI18n } from './i18n';
+import { isFrench, t, webviewI18n } from './i18n';
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { CHAR_W, ErEdge, ErLayout, ErTable, HEAD_H, PAD, ROW_H } from './erLayout';
@@ -83,29 +83,29 @@ const SCRIPT = String.raw`
   var bar = el('div', 'bar');
   bar.appendChild(el('strong', '', data.title));
   (data.badges || []).forEach(function (b) { bar.appendChild(el('span', 'badge' + (b === 'PRODUCTION' ? ' prod' : ''), b)); });
-  bar.appendChild(el('span', 'muted', data.connection + ' · ' + data.tables.length + ' tables · ' + data.edges.length + ' relations'));
+  bar.appendChild(el('span', 'muted', data.connection + ' · ' + data.tables.length + T(' tables · ', data.tables.length === 1 ? ' table · ' : ' tables · ') + data.edges.length + T(' relations', data.edges.length === 1 ? ' relationship' : ' relationships')));
   bar.appendChild(el('span', 'spacer'));
-  var search = el('input'); search.type = 'search'; search.placeholder = 'Chercher une table…'; search.setAttribute('aria-label', 'Chercher une table');
+  var search = el('input'); search.type = 'search'; search.placeholder = T('Chercher une table…', 'Search for a table…'); search.setAttribute('aria-label', T('Chercher une table', 'Search for a table'));
   var keysLabel = el('label', 'chk'); var keys = el('input'); keys.type = 'checkbox'; keys.id = 'keysOnly';
-  keysLabel.appendChild(keys); keysLabel.appendChild(document.createTextNode(' Clés seulement'));
-  var bIn = el('button', '', '+'); bIn.title = 'Zoom avant'; bIn.setAttribute('aria-label', 'Zoom avant');
-  var bOut = el('button', '', '−'); bOut.title = 'Zoom arrière'; bOut.setAttribute('aria-label', 'Zoom arrière');
-  var bFit = el('button', '', 'Ajuster'); bFit.title = 'Tout afficher';
-  var bReset = el('button', '', 'Réorganiser'); bReset.title = 'Revenir à la disposition automatique';
-  var bMer = el('button', '', 'Copier (Mermaid)'); bMer.title = 'Copier le schéma au format Mermaid erDiagram';
-  var bSvg = el('button', '', 'Exporter en SVG');
+  keysLabel.appendChild(keys); keysLabel.appendChild(document.createTextNode(' ' + T('Clés seulement', 'Keys only')));
+  var bIn = el('button', '', '+'); bIn.title = T('Zoom avant', 'Zoom in'); bIn.setAttribute('aria-label', T('Zoom avant', 'Zoom in'));
+  var bOut = el('button', '', '−'); bOut.title = T('Zoom arrière', 'Zoom out'); bOut.setAttribute('aria-label', T('Zoom arrière', 'Zoom out'));
+  var bFit = el('button', '', T('Ajuster', 'Fit')); bFit.title = T('Tout afficher', 'Show everything');
+  var bReset = el('button', '', T('Réorganiser', 'Rearrange')); bReset.title = T('Revenir à la disposition automatique', 'Return to the automatic layout');
+  var bMer = el('button', '', T('Copier (Mermaid)', 'Copy (Mermaid)')); bMer.title = T('Copier le schéma au format Mermaid erDiagram', 'Copy the schema as a Mermaid erDiagram');
+  var bSvg = el('button', '', T('Exporter en SVG', 'Export as SVG'));
   [search, keysLabel, bOut, bIn, bFit, bReset, bMer, bSvg].forEach(function (x) { bar.appendChild(x); });
   root.appendChild(bar);
-  var hintText = 'Glisser une table pour la déplacer, le fond pour se déplacer, la molette pour zoomer, double-clic sur une table pour afficher ses données.';
-  if (data.external > 0) { hintText += ' ' + data.external + ' clé(s) étrangère(s) mènent hors du diagramme (marquées ↗).'; }
-  if (data.skipped > 0) { hintText += ' ' + data.skipped + ' table(s) non affichées (limite atteinte).'; }
+  var hintText = T('Glisser une table pour la déplacer, le fond pour se déplacer, la molette pour zoomer, double-clic sur une table pour afficher ses données.', 'Drag a table to move it, the background to pan, use the wheel to zoom, double-click a table to show its data.');
+  if (data.external > 0) { hintText += ' ' + T(data.external + ' clé(s) étrangère(s) mènent hors du diagramme (marquées ↗).', data.external + ' foreign key(s) lead outside the diagram (marked ↗).'); }
+  if (data.skipped > 0) { hintText += ' ' + T(data.skipped + ' table(s) non affichées (limite atteinte).', data.skipped + ' table(s) not shown (limit reached).'); }
   root.appendChild(el('div', '', '')).id = 'hint';
   document.getElementById('hint').textContent = hintText;
 
   var stage = el('div'); stage.id = 'stage'; root.appendChild(stage);
-  if (data.tables.length === 0) { stage.appendChild(el('div', '', 'Aucune table dans ce schéma.')).id = 'empty'; return; }
+  if (data.tables.length === 0) { stage.appendChild(el('div', '', T('Aucune table dans ce schéma.', 'No tables in this schema.'))).id = 'empty'; return; }
 
-  var svg = sv('svg', { role: 'img', 'aria-label': 'Diagramme des relations' });
+  var svg = sv('svg', { role: 'img', 'aria-label': T('Diagramme des relations', 'Relationship diagram') });
   var defs = sv('defs');
   var style = document.createElementNS(NS, 'style'); style.id = 'themeStyle'; // rempli seulement à l'export (la CSP interdit les styles ajoutés par script)
   defs.appendChild(style);
@@ -181,9 +181,9 @@ const SCRIPT = String.raw`
     });
     if (p.hidden > 0) {
       var mo = sv('text', { 'class': 'more', x: C.pad + 20, y: C.headH + C.rowH * p.rows.length + 13 });
-      mo.textContent = '… ' + p.hidden + ' autre' + (p.hidden > 1 ? 's' : '') + ' colonne' + (p.hidden > 1 ? 's' : ''); g.appendChild(mo);
+      mo.textContent = T('… ' + p.hidden + ' autre' + (p.hidden > 1 ? 's' : '') + ' colonne' + (p.hidden > 1 ? 's' : ''), '… ' + p.hidden + ' more column' + (p.hidden > 1 ? 's' : '')); g.appendChild(mo);
     }
-    var tip = sv('title'); tip.textContent = name + ' — ' + t.columns.length + ' colonnes'; g.appendChild(tip);
+    var tip = sv('title'); tip.textContent = name + ' — ' + t.columns.length + T(' colonnes', t.columns.length === 1 ? ' column' : ' columns'); g.appendChild(tip);
     nodeLayer.appendChild(g);
     nodeEls[name] = g;
     return g;
@@ -308,12 +308,12 @@ const SCRIPT = String.raw`
 export function buildDiagramHtml(payload: DiagramPayload, nonce: string): string {
   const data = JSON.stringify({ ...payload, staticTheme: STATIC }).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="${isFrench() ? 'fr' : 'en'}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Diagramme</title>
+<title>${t('Diagramme', 'Diagram')}</title>
 <style nonce="${nonce}">${CSS}${THEME}</style>
 </head>
 <body>
@@ -336,7 +336,7 @@ export class DiagramPanels {
     if (!panel) {
       panel = vscode.window.createWebviewPanel(
         'dbExplorer.diagram',
-        `Diagramme · ${payload.title}`,
+        t(`Diagramme · ${payload.title}`, `Diagram · ${payload.title}`),
         { viewColumn: vscode.ViewColumn.Active },
         { enableScripts: true, retainContextWhenHidden: true },
       );
@@ -354,17 +354,17 @@ export class DiagramPanels {
           st.onOpen(msg.table);
         } else if (msg?.type === 'copyMermaid') {
           await vscode.env.clipboard.writeText(st.mermaid);
-          void vscode.window.showInformationMessage('Schéma Mermaid copié dans le presse-papiers.');
+          void vscode.window.showInformationMessage(t('Schéma Mermaid copié dans le presse-papiers.', 'Mermaid schema copied to the clipboard.'));
         } else if (msg?.type === 'saveSvg' && typeof msg.svg === 'string') {
-          const uri = await vscode.window.showSaveDialog({ filters: { SVG: ['svg'] }, saveLabel: 'Exporter' });
+          const uri = await vscode.window.showSaveDialog({ filters: { SVG: ['svg'] }, saveLabel: t('Exporter', 'Export') });
           if (uri) {
             await vscode.workspace.fs.writeFile(uri, Buffer.from(msg.svg, 'utf8'));
-            void vscode.window.showInformationMessage(`Diagramme enregistré : ${uri.fsPath}`);
+            void vscode.window.showInformationMessage(t(`Diagramme enregistré : ${uri.fsPath}`, `Diagram saved: ${uri.fsPath}`));
           }
         }
       });
     } else {
-      panel.title = `Diagramme · ${payload.title}`;
+      panel.title = t(`Diagramme · ${payload.title}`, `Diagram · ${payload.title}`);
       panel.reveal();
     }
     this.state.set(key, { payload, mermaid, onOpen });

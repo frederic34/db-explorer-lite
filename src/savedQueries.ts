@@ -1,4 +1,5 @@
 import { Store } from './history';
+import { t } from './i18n';
 
 export interface SavedQuery {
   id: string;
@@ -46,7 +47,7 @@ export class SavedQueries {
     const name = q.name.trim().slice(0, 120);
     const sql = q.sql.trim().slice(0, MAX_SQL);
     if (!name || !sql) {
-      throw new Error('Nom et requête obligatoires.');
+      throw new Error(t('Nom et requête obligatoires.', 'Name and query are required.'));
     }
     const created: SavedQuery = { id: this.newId(), name, sql, folder: q.folder?.trim().slice(0, 80) || undefined, connectionId: q.connectionId };
     await this.write([...this.list(), created]);
@@ -74,7 +75,7 @@ export class SavedQueries {
   async renameFolder(from: string, to: string): Promise<void> {
     const name = to.trim().slice(0, 80);
     if (!name) {
-      throw new Error('Le nom du dossier ne peut pas être vide.');
+      throw new Error(t('Le nom du dossier ne peut pas être vide.', 'The folder name cannot be empty.'));
     }
     await this.write(this.list().map((q) => (q.folder === from ? { ...q, folder: name } : q)));
   }

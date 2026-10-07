@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { SavedQueries, SavedQuery } from './savedQueries';
+import { t } from './i18n';
 
 export class SavedFolderNode extends vscode.TreeItem {
   constructor(public readonly name: string, count: number) {
@@ -17,7 +18,7 @@ export class SavedQueryNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon('file-code');
     this.description = query.sql.replace(/\s+/g, ' ').slice(0, 60);
     this.tooltip = new vscode.MarkdownString().appendCodeblock(query.sql.slice(0, 1500), 'sql');
-    this.command = { command: 'dbExplorer.openSaved', title: 'Ouvrir', arguments: [this] };
+    this.command = { command: 'dbExplorer.openSaved', title: t('Ouvrir', 'Open'), arguments: [this] };
   }
 }
 

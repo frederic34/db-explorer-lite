@@ -36,6 +36,7 @@ import {
   serializeConnections,
   SOURCES,
 } from './importers';
+import { t, isFrench } from './i18n';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -81,20 +82,20 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     status.text = cfg
       ? `$(${cfg.production ? 'warning' : cfg.readOnly ? 'lock' : 'database'}) ${cfg.name}` +
         (cfg.production ? ' · PROD' : '') +
-        (cfg.readOnly ? ' · lecture seule' : '')
-      : '$(database) Choisir une connexion SQL';
+        (cfg.readOnly ? t(' · lecture seule', ' · read-only') : '')
+      : t('$(database) Choisir une connexion SQL', '$(database) Select a SQL connection');
     status.backgroundColor = cfg?.production
       ? new vscode.ThemeColor('statusBarItem.errorBackground')
       : undefined;
-    status.tooltip = 'DB Explorer : connexion utilisée pour exécuter les requêtes de ce fichier';
+    status.tooltip = t('DB Explorer : connexion utilisée pour exécuter les requêtes de ce fichier', 'DB Explorer: connection used to run the queries of this file');
     status.show();
   };
 
   // --- Requête en cours : indicateur cliquable pour l'annuler -----------------------------
   const runningItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 89);
   runningItem.command = 'dbExplorer.cancelQuery';
-  runningItem.text = '$(sync~spin) Requête en cours… (cliquer pour annuler)';
-  runningItem.tooltip = 'DB Explorer : interrompre la requête côté serveur';
+  runningItem.text = t('$(sync~spin) Requête en cours… (cliquer pour annuler)', '$(sync~spin) Query running… (click to cancel)');
+  runningItem.tooltip = t('DB Explorer : interrompre la requête côté serveur', 'DB Explorer: interrupt the query on the server');
   let runningTimer: NodeJS.Timeout | undefined;
   const updateRunning = (): void => {
     void vscode.commands.executeCommand('setContext', 'dbExplorer.queryRunning', running.size > 0);
@@ -114,9 +115,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
   async function pickConnection(): Promise<ConnectionConfig | undefined> {
     const all = mgr.list();
     if (all.length === 0) {
+      const addLabel = t('Ajouter une connexion', 'Add a connection');
       const choice = await vscode.window.showInformationMessage(
-        'Aucune connexion configurée.',
-        'Ajouter une connexion',
+        t('Aucune connexion configurée.', 'No connection configured.'),
+        addLabel,
       );
       if (choice) {
         addConnection();
@@ -128,7 +130,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }
     const pick = await vscode.window.showQuickPick(
       all.map((c) => ({ label: c.name, description: `${c.host}:${c.port}`, config: c })),
-      { placeHolder: 'Choisir une connexion' },
+      { placeHolder: t('Choisir une connexion', 'Select a connection') },
     );
     return pick?.config;
   }
@@ -150,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
 
   const badgesOf = (cfg: ConnectionConfig): string[] => [
     ...(cfg.production ? ['PRODUCTION'] : []),
-    ...(cfg.readOnly ? ['LECTURE SEULE'] : []),
+    ...(cfg.readOnly ? [t('LECTURE SEULE', 'READ-ONLY')] : []),
   ];
 
   /** Paramètres `:nom` : valeurs demandées une à une (la dernière saisie sert de défaut), puis injectées en littéraux. */
@@ -166,8 +168,8 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     const values: Record<string, string> = {};
     for (const [k, name] of names.entries()) {
       const v = await vscode.window.showInputBox({
-        title: `Paramètre :${name} (${k + 1}/${names.length})`,
-        prompt: 'Nombre, texte (mis entre apostrophes automatiquement) ou null',
+        title: t(`Paramètre :${name} (${k + 1}/${names.length})`, `Parameter :${name} (${k + 1}/${names.length})`),
+        prompt: t('Nombre, texte (mis entre apostrophes automatiquement) ou null', 'Number, text (automatically quoted) or null'),
         value: memory[name] ?? '',
         ignoreFocusOut: true,
       });
@@ -256,7 +258,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }
     const confirm = opts.confirmExtra ?? verdict.confirm;
     if (confirm) {
-      const run = 'Exécuter';
+      const run = t('Exécuter', 'Run');
       const choice = await vscode.window.showWarningMessage(
         confirm.message,
         { modal: true, detail: confirm.detail },
@@ -269,7 +271,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
-        title: `DB Explorer : exécution sur ${cfg.name}…`,
+        title: t(`DB Explorer : exécution sur ${cfg.name}…`, `DB Explorer: running on ${cfg.name}…`),
       },
       async () => {
         const token = new CancelToken();
@@ -313,7 +315,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
           results.showResult(cfg.name, sql, result, badges, cfg.type, editable);
         } catch (err) {
           record(false);
-          results.showError(cfg.name, sql, token.requested ? 'Requête annulée.' : errorMessage(err), badges);
+          results.showError(cfg.name, sql, token.requested ? t('Requête annulée.', 'Query cancelled.') : errorMessage(err), badges);
         } finally {
           running.delete(token);
           updateRunning();
@@ -324,10 +326,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
 
   /** Dossier choisi pour une requête enregistrée : '' = racine, null = annulé. */
   async function pickSavedFolder(): Promise<string | '' | null> {
-    const NEW = '$(new-folder) Nouveau dossier…';
-    const NONE = '$(circle-slash) Aucun dossier (racine)';
+    const NEW = t('$(new-folder) Nouveau dossier…', '$(new-folder) New folder…');
+    const NONE = t('$(circle-slash) Aucun dossier (racine)', '$(circle-slash) No folder (root)');
     const pick = await vscode.window.showQuickPick([NONE, ...saved.folders().map((f) => `$(folder) ${f}`), NEW], {
-      placeHolder: 'Dossier',
+      placeHolder: t('Dossier', 'Folder'),
     });
     if (!pick) {
       return null;
@@ -336,7 +338,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       return '';
     }
     if (pick === NEW) {
-      const name = await vscode.window.showInputBox({ title: 'Nouveau dossier' });
+      const name = await vscode.window.showInputBox({ title: t('Nouveau dossier', 'New folder') });
       return name?.trim() ? name.trim() : null;
     }
     return pick.replace(/^\$\(folder\) /, '');
@@ -346,7 +348,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
   async function runCurrent(mode: 'run' | 'explain' | 'analyze'): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-      vscode.window.showInformationMessage('Ouvrez un fichier SQL.');
+      vscode.window.showInformationMessage(t('Ouvrez un fichier SQL.', 'Open a SQL file.'));
       return;
     }
     const id = await connectionForDocument(editor.document);
@@ -360,7 +362,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       : doc.getText(editor.selection);
     const sql = text?.trim();
     if (!sql) {
-      vscode.window.showInformationMessage('Aucune instruction sous le curseur.');
+      vscode.window.showInformationMessage(t('Aucune instruction sous le curseur.', 'No statement under the cursor.'));
       return;
     }
     if (mode === 'run' || isExplain(sql)) {
@@ -368,12 +370,12 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       return;
     }
     if (splitStatements(sql, cfg.type).length !== 1) {
-      vscode.window.showInformationMessage('EXPLAIN porte sur une seule instruction : placez le curseur dans l\'une d\'elles.');
+      vscode.window.showInformationMessage(t('EXPLAIN porte sur une seule instruction : placez le curseur dans l\'une d\'elles.', 'EXPLAIN applies to a single statement: place the cursor in one of them.'));
       return;
     }
     const analyze = mode === 'analyze';
     if (analyze && cfg.type === 'sqlite') {
-      vscode.window.showInformationMessage('SQLite ne mesure pas l\'exécution : plan estimé affiché.');
+      vscode.window.showInformationMessage(t('SQLite ne mesure pas l\'exécution : plan estimé affiché.', 'SQLite does not measure execution: showing the estimated plan.'));
     }
     const useAnalyze = analyze && cfg.type !== 'sqlite';
     const plan = explainSql(cfg.type, sql, useAnalyze);
@@ -382,7 +384,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       fallback: plan.fallback,
       transform: (r) => planToResult(cfg.type, r, useAnalyze),
       confirmExtra: useAnalyze && writes
-        ? { message: 'EXPLAIN ANALYZE exécute réellement l\'instruction. Continuer ?', detail: sql }
+        ? { message: t('EXPLAIN ANALYZE exécute réellement l\'instruction. Continuer ?', 'EXPLAIN ANALYZE actually runs the statement. Continue?'), detail: sql }
         : undefined,
     });
   }
@@ -393,7 +395,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
-        title: `DB Explorer : lecture de ${node.table.name}…`,
+        title: t(`DB Explorer : lecture de ${node.table.name}…`, `DB Explorer: reading ${node.table.name}…`),
       },
       async () => {
         try {
@@ -415,7 +417,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         } catch (err) {
           results.showError(
             cfg.name,
-            `Aperçu de ${node.container}.${node.table.name}`,
+            t(`Aperçu de ${node.container}.${node.table.name}`, `Preview of ${node.container}.${node.table.name}`),
             errorMessage(err),
             badgesOf(cfg),
           );
@@ -436,16 +438,16 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     const choice = await vscode.window.showQuickPick<Source>(
       [
         ...found,
-        { label: '$(file) Choisir un fichier…', description: 'export JSON de DB Explorer Lite, .pgpass, .pg_service.conf, .my.cnf', browse: true },
+        { label: t('$(file) Choisir un fichier…', '$(file) Choose a file…'), description: t('export JSON de DB Explorer Lite, .pgpass, .pg_service.conf, .my.cnf', 'DB Explorer Lite JSON export, .pgpass, .pg_service.conf, .my.cnf'), browse: true },
       ],
-      { placeHolder: 'Importer des connexions depuis…' },
+      { placeHolder: t('Importer des connexions depuis…', 'Import connections from…') },
     );
     if (!choice) {
       return;
     }
     let file = choice.path;
     if (choice.browse) {
-      const picked = await vscode.window.showOpenDialog({ canSelectMany: false, title: 'Importer des connexions', openLabel: 'Importer' });
+      const picked = await vscode.window.showOpenDialog({ canSelectMany: false, title: t('Importer des connexions', 'Import connections'), openLabel: t('Importer', 'Import') });
       file = picked?.[0]?.fsPath;
     }
     if (!file) {
@@ -453,24 +455,24 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }
     const size = fs.statSync(file).size;
     if (size > 5 * 1024 * 1024) {
-      throw new Error('Fichier trop volumineux (5 Mo au maximum).');
+      throw new Error(t('Fichier trop volumineux (5 Mo au maximum).', 'File too large (5 MB maximum).'));
     }
     const content = fs.readFileSync(file, 'utf8');
     const kind = choice.source ?? guessSource(file, content);
     if (!kind) {
-      throw new Error("Type de fichier non reconnu (attendu : export JSON, .pgpass, .pg_service.conf ou .my.cnf).");
+      throw new Error(t('Type de fichier non reconnu (attendu : export JSON, .pgpass, .pg_service.conf ou .my.cnf).', 'Unrecognized file type (expected: JSON export, .pgpass, .pg_service.conf or .my.cnf).'));
     }
     const parsed: ImportResult = kind === 'json' ? parseConnectionsFile(content) : SOURCES[kind].parse(content);
     const planned = planImport(parsed.items, mgr.list());
     if (planned.length === 0) {
       vscode.window.showWarningMessage(
-        `Aucune connexion importable dans ${file}.` + (parsed.skipped.length ? ` ${parsed.skipped.slice(0, 3).join(' ; ')}` : ''),
+        t(`Aucune connexion importable dans ${file}.`, `No importable connection in ${file}.`) + (parsed.skipped.length ? ` ${parsed.skipped.slice(0, 3).join(' ; ')}` : ''),
       );
       return;
     }
     const picks = await vscode.window.showQuickPick(
       planned.map((p) => ({ label: p.label, detail: p.detail, picked: !p.duplicate, item: p })),
-      { canPickMany: true, placeHolder: `${planned.length} connexion(s) trouvée(s) : cochez celles à importer`, matchOnDetail: true },
+      { canPickMany: true, placeHolder: t(`${planned.length} connexion(s) trouvée(s) : cochez celles à importer`, `${planned.length} connection(s) found: tick the ones to import`), matchOnDetail: true },
     );
     if (!picks || picks.length === 0) {
       return;
@@ -479,12 +481,15 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       await mgr.save({ id: randomUUID(), ...p.item.config }, p.item.password);
     }
     const withoutPassword = picks.filter((p) => p.item.config.type !== 'sqlite' && !p.item.password).length;
-    let msg = `${picks.length} connexion(s) importée(s).`;
+    let msg = t(`${picks.length} connexion(s) importée(s).`, `${picks.length} connection(s) imported.`);
     if (withoutPassword > 0) {
-      msg += ` ${withoutPassword} sans mot de passe : saisissez-le en modifiant la connexion.`;
+      msg += t(` ${withoutPassword} sans mot de passe : saisissez-le en modifiant la connexion.`, ` ${withoutPassword} without a password: enter it by editing the connection.`);
     }
     if (parsed.skipped.length > 0) {
-      msg += ` ${parsed.skipped.length} entrée(s) ignorée(s) (${parsed.skipped.slice(0, 2).join(' ; ')}${parsed.skipped.length > 2 ? '…' : ''}).`;
+      msg += t(
+        ` ${parsed.skipped.length} entrée(s) ignorée(s) (${parsed.skipped.slice(0, 2).join(' ; ')}${parsed.skipped.length > 2 ? '…' : ''}).`,
+        ` ${parsed.skipped.length} entry(ies) skipped (${parsed.skipped.slice(0, 2).join('; ')}${parsed.skipped.length > 2 ? '…' : ''}).`,
+      );
     }
     vscode.window.showInformationMessage(msg);
   }
@@ -508,9 +513,9 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const remove = 'Supprimer';
+      const remove = t('Supprimer', 'Delete');
       const choice = await vscode.window.showWarningMessage(
-        `Supprimer la connexion « ${node.config.name} » ?`,
+        t(`Supprimer la connexion « ${node.config.name} » ?`, `Delete connection “${node.config.name}”?`),
         { modal: true },
         remove,
       );
@@ -524,22 +529,22 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const NEW = '$(add) Nouveau groupe…';
-      const NONE = '$(close) Aucun groupe';
+      const NEW = t('$(add) Nouveau groupe…', '$(add) New group…');
+      const NONE = t('$(close) Aucun groupe', '$(close) No group');
       const pick = await vscode.window.showQuickPick(
         [
-          ...mgr.groups().map((g) => ({ label: g, description: g === node.config.group ? 'actuel' : undefined })),
+          ...mgr.groups().map((g) => ({ label: g, description: g === node.config.group ? t('actuel', 'current') : undefined })),
           { label: NEW, alwaysShow: true },
           { label: NONE, alwaysShow: true },
         ],
-        { placeHolder: `Ranger « ${node.config.name} » dans un groupe` },
+        { placeHolder: t(`Ranger « ${node.config.name} » dans un groupe`, `Put “${node.config.name}” in a group`) },
       );
       if (!pick) {
         return;
       }
       let group: string | undefined;
       if (pick.label === NEW) {
-        group = (await vscode.window.showInputBox({ prompt: 'Nom du nouveau groupe', validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire') }))?.trim();
+        group = (await vscode.window.showInputBox({ prompt: t('Nom du nouveau groupe', 'New group name'), validateInput: (v) => (v.trim() ? undefined : t('Nom obligatoire', 'Name required')) }))?.trim();
         if (!group) {
           return;
         }
@@ -554,9 +559,9 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         return;
       }
       const name = await vscode.window.showInputBox({
-        prompt: `Nouveau nom du groupe « ${node.name} »`,
+        prompt: t(`Nouveau nom du groupe « ${node.name} »`, `New name for group “${node.name}”`),
         value: node.name,
-        validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+        validateInput: (v) => (v.trim() ? undefined : t('Nom obligatoire', 'Name required')),
       });
       if (name && name.trim() !== node.name) {
         await mgr.renameGroup(node.name, name);
@@ -567,10 +572,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const remove = 'Supprimer le groupe';
+      const remove = t('Supprimer le groupe', 'Delete group');
       const choice = await vscode.window.showWarningMessage(
-        `Supprimer le groupe « ${node.name} » ?`,
-        { modal: true, detail: `Ses ${node.count} connexion(s) sont conservées, hors de tout groupe.` },
+        t(`Supprimer le groupe « ${node.name} » ?`, `Delete group “${node.name}”?`),
+        { modal: true, detail: t(`Ses ${node.count} connexion(s) sont conservées, hors de tout groupe.`, `Its ${node.count} connection(s) are kept, outside any group.`) },
         remove,
       );
       if (choice === remove) {
@@ -581,12 +586,12 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     vscode.commands.registerCommand('dbExplorer.exportConnections', async () => {
       const all = mgr.list();
       if (all.length === 0) {
-        vscode.window.showInformationMessage('Aucune connexion à exporter.');
+        vscode.window.showInformationMessage(t('Aucune connexion à exporter.', 'No connections to export.'));
         return;
       }
       const uri = await vscode.window.showSaveDialog({
         filters: { JSON: ['json'] },
-        saveLabel: 'Exporter',
+        saveLabel: t('Exporter', 'Export'),
         defaultUri: vscode.Uri.file(`${os.homedir()}/connexions-db-explorer.json`),
       });
       if (!uri) {
@@ -594,7 +599,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       }
       await vscode.workspace.fs.writeFile(uri, Buffer.from(serializeConnections(all), 'utf8'));
       vscode.window.showInformationMessage(
-        `${all.length} connexion(s) exportée(s) dans ${uri.fsPath}. Les mots de passe ne sont jamais exportés.`,
+        t(
+          `${all.length} connexion(s) exportée(s) dans ${uri.fsPath}. Les mots de passe ne sont jamais exportés.`,
+          `${all.length} connection(s) exported to ${uri.fsPath}. Passwords are never exported.`,
+        ),
       );
     }),
 
@@ -602,7 +610,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       try {
         await importConnections();
       } catch (err) {
-        vscode.window.showErrorMessage(`Import impossible : ${errorMessage(err)}`);
+        vscode.window.showErrorMessage(t(`Import impossible : ${errorMessage(err)}`, `Import failed: ${errorMessage(err)}`));
       }
     }),
 
@@ -612,9 +620,12 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }),
 
     vscode.commands.registerCommand('dbExplorer.forgetSshHosts', async () => {
-      const forget = 'Oublier';
+      const forget = t('Oublier', 'Forget');
       const choice = await vscode.window.showWarningMessage(
-        "Oublier toutes les empreintes de serveurs SSH approuvées ? Elles seront redemandées à la prochaine connexion.",
+        t(
+          'Oublier toutes les empreintes de serveurs SSH approuvées ? Elles seront redemandées à la prochaine connexion.',
+          'Forget all trusted SSH server fingerprints? They will be requested again on the next connection.',
+        ),
         { modal: true },
         forget,
       );
@@ -630,7 +641,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     vscode.commands.registerCommand('dbExplorer.history', async () => {
       const entries = history.list();
       if (entries.length === 0) {
-        vscode.window.showInformationMessage("L'historique des requêtes est vide.");
+        vscode.window.showInformationMessage(t("L'historique des requêtes est vide.", 'The query history is empty.'));
         return;
       }
       const pick = await vscode.window.showQuickPick(
@@ -638,12 +649,12 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
           const lines = e.sql.split('\n');
           return {
             label: `${e.ok ? '$(check)' : '$(error)'} ${lines[0].slice(0, 100)}${lines.length > 1 ? ' …' : ''}`,
-            description: `${e.connectionName} · ${new Date(e.at).toLocaleString('fr-FR')}${e.ms !== undefined ? ` · ${e.ms} ms` : ''}`,
+            description: `${e.connectionName} · ${new Date(e.at).toLocaleString(isFrench() ? 'fr-FR' : 'en-GB')}${e.ms !== undefined ? ` · ${e.ms} ms` : ''}`,
             detail: lines.length > 1 ? e.sql.replace(/\s+/g, ' ').slice(0, 200) : undefined,
             entry: e,
           };
         }),
-        { placeHolder: "Rechercher dans l'historique…", matchOnDescription: true, matchOnDetail: true },
+        { placeHolder: t("Rechercher dans l'historique…", 'Search the history…'), matchOnDescription: true, matchOnDetail: true },
       );
       if (!pick) {
         return;
@@ -657,9 +668,9 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }),
 
     vscode.commands.registerCommand('dbExplorer.clearHistory', async () => {
-      const clear = 'Effacer';
+      const clear = t('Effacer', 'Clear');
       const choice = await vscode.window.showWarningMessage(
-        "Effacer tout l'historique des requêtes ?",
+        t("Effacer tout l'historique des requêtes ?", 'Clear the entire query history?'),
         { modal: true },
         clear,
       );
@@ -694,7 +705,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     vscode.commands.registerCommand('dbExplorer.runQuery', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        vscode.window.showInformationMessage('Ouvrez un fichier SQL pour exécuter une requête.');
+        vscode.window.showInformationMessage(t('Ouvrez un fichier SQL pour exécuter une requête.', 'Open a SQL file to run a query.'));
         return;
       }
       const text = editor.selection.isEmpty
@@ -702,7 +713,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         : editor.document.getText(editor.selection);
       const sql = text.trim();
       if (!sql) {
-        vscode.window.showInformationMessage('Aucune requête à exécuter.');
+        vscode.window.showInformationMessage(t('Aucune requête à exécuter.', 'No query to run.'));
         return;
       }
       const id = await connectionForDocument(editor.document);
@@ -714,7 +725,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     vscode.commands.registerCommand('dbExplorer.saveQuery', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        vscode.window.showInformationMessage('Ouvrez un fichier SQL.');
+        vscode.window.showInformationMessage(t('Ouvrez un fichier SQL.', 'Open a SQL file.'));
         return;
       }
       const docId = docConnections.get(editor.document.uri.toString());
@@ -725,11 +736,11 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
           : editor.document.getText(editor.selection)
       ).trim();
       if (!sql) {
-        vscode.window.showInformationMessage('Aucune requête à enregistrer.');
+        vscode.window.showInformationMessage(t('Aucune requête à enregistrer.', 'No query to save.'));
         return;
       }
       const first = sql.split('\n')[0].replace(/\s+/g, ' ').slice(0, 60);
-      const name = await vscode.window.showInputBox({ title: 'Enregistrer la requête', prompt: 'Nom', value: first, ignoreFocusOut: true });
+      const name = await vscode.window.showInputBox({ title: t('Enregistrer la requête', 'Save query'), prompt: t('Nom', 'Name'), value: first, ignoreFocusOut: true });
       if (!name?.trim()) {
         return;
       }
@@ -738,7 +749,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         return;
       }
       await saved.add({ name, sql, folder: folder || undefined, connectionId: docId });
-      vscode.window.showInformationMessage(`Requête « ${name.trim()} » enregistrée.`);
+      vscode.window.showInformationMessage(t(`Requête « ${name.trim()} » enregistrée.`, `Query “${name.trim()}” saved.`));
     }),
 
     vscode.commands.registerCommand('dbExplorer.openSaved', async (node?: SavedQueryNode) => {
@@ -768,7 +779,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const name = await vscode.window.showInputBox({ title: 'Renommer la requête', value: node.query.name });
+      const name = await vscode.window.showInputBox({ title: t('Renommer la requête', 'Rename query'), value: node.query.name });
       if (name?.trim()) {
         await saved.update(node.query.id, { name });
       }
@@ -788,8 +799,8 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const del = 'Supprimer';
-      if ((await vscode.window.showWarningMessage(`Supprimer la requête « ${node.query.name} » ?`, { modal: true }, del)) === del) {
+      const del = t('Supprimer', 'Delete');
+      if ((await vscode.window.showWarningMessage(t(`Supprimer la requête « ${node.query.name} » ?`, `Delete query “${node.query.name}”?`), { modal: true }, del)) === del) {
         await saved.remove(node.query.id);
       }
     }),
@@ -798,7 +809,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const name = await vscode.window.showInputBox({ title: 'Renommer le dossier', value: node.name });
+      const name = await vscode.window.showInputBox({ title: t('Renommer le dossier', 'Rename folder'), value: node.name });
       if (name?.trim() && name.trim() !== node.name) {
         await saved.renameFolder(node.name, name);
       }
@@ -808,9 +819,9 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       if (!node) {
         return;
       }
-      const del = 'Supprimer le dossier';
+      const del = t('Supprimer le dossier', 'Delete folder');
       if (
-        (await vscode.window.showWarningMessage(`Supprimer le dossier « ${node.name} » ? Ses requêtes sont conservées, à la racine.`, { modal: true }, del)) === del
+        (await vscode.window.showWarningMessage(t(`Supprimer le dossier « ${node.name} » ? Ses requêtes sont conservées, à la racine.`, `Delete folder “${node.name}”? Its queries are kept, at the root.`), { modal: true }, del)) === del
       ) {
         await saved.removeFolder(node.name);
       }
@@ -845,7 +856,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       const cfg = node.connection;
       try {
         const structure = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Window, title: `DB Explorer : structure de ${node.table.name}…` },
+          { location: vscode.ProgressLocation.Window, title: t(`DB Explorer : structure de ${node.table.name}…`, `DB Explorer: structure of ${node.table.name}…`) },
           async () => (await mgr.getDriver(cfg.id)).describeTable(node.container, node.table.name),
         );
         structures.show(`${cfg.id}/${node.container}/${node.table.name}`, {
@@ -855,7 +866,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
           structure,
         });
       } catch (err) {
-        vscode.window.showErrorMessage(`Structure de ${node.table.name} : ${errorMessage(err)}`);
+        vscode.window.showErrorMessage(t(`Structure de ${node.table.name} : ${errorMessage(err)}`, `Structure of ${node.table.name}: ${errorMessage(err)}`));
       }
     }),
 
@@ -869,8 +880,8 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       let target: ConnectionConfig | undefined = a;
       if (sameType.length > 1) {
         const pick = await vscode.window.showQuickPick(
-          sameType.map((c) => ({ label: c.name, description: c.id === a.id ? '(même connexion)' : '', cfg: c })),
-          { placeHolder: `Comparer « ${node.container} » avec une base de quelle connexion ?` },
+          sameType.map((c) => ({ label: c.name, description: c.id === a.id ? t('(même connexion)', '(same connection)') : '', cfg: c })),
+          { placeHolder: t(`Comparer « ${node.container} » avec une base de quelle connexion ?`, `Compare “${node.container}” with a database from which connection?`) },
         );
         target = pick?.cfg;
       }
@@ -883,16 +894,19 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
           (c) => !(target?.id === a.id && c === node.container),
         );
         if (containers.length === 0) {
-          vscode.window.showInformationMessage('Aucune autre base ou aucun autre schéma à comparer.');
+          vscode.window.showInformationMessage(t('Aucune autre base ou aucun autre schéma à comparer.', 'No other database or schema to compare.'));
           return;
         }
         targetContainer = (
           await vscode.window.showQuickPick(containers, {
-            placeHolder: `Cible (« ${node.container} » est la référence : le script mettra la cible à son niveau)`,
+            placeHolder: t(
+              `Cible (« ${node.container} » est la référence : le script mettra la cible à son niveau)`,
+              `Target (“${node.container}” is the reference: the script will bring the target up to date)`,
+            ),
           })
         );
       } catch (err) {
-        vscode.window.showErrorMessage(`DB Explorer : ${errorMessage(err)}`);
+        vscode.window.showErrorMessage(t(`DB Explorer : ${errorMessage(err)}`, `DB Explorer: ${errorMessage(err)}`));
         return;
       }
       if (!targetContainer) {
@@ -901,7 +915,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       const b = { cfg: target, container: targetContainer };
       try {
         const diff = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `DB Explorer : comparaison de ${node.container} et ${b.container}…` },
+          { location: vscode.ProgressLocation.Notification, title: t(`DB Explorer : comparaison de ${node.container} et ${b.container}…`, `DB Explorer: comparing ${node.container} and ${b.container}…`) },
           async (progress) => {
             const [da, db] = await Promise.all([mgr.getDriver(a.id), mgr.getDriver(b.cfg.id)]);
             const snapA = await takeSnapshot(da, node.container, (d, n) => progress.report({ message: `${node.container} : ${d} / ${n}` }));
@@ -909,13 +923,13 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
             return diffSchemas(snapA, snapB);
           },
         );
-        const label = { missing: 'manquant dans la cible', extra: 'en trop dans la cible', changed: 'différent' } as const;
-        const what = { table: 'table', view: 'vue', column: 'colonne', index: 'index', constraint: 'contrainte' } as const;
+        const label = { missing: t('manquant dans la cible', 'missing in target'), extra: t('en trop dans la cible', 'extra in target'), changed: t('différent', 'different') } as const;
+        const what = { table: t('table', 'table'), view: t('vue', 'view'), column: t('colonne', 'column'), index: 'index', constraint: t('contrainte', 'constraint') } as const;
         results.showResult(
           a.name,
-          `Comparaison ${node.container} (référence) → ${b.container} (cible)`,
+          t(`Comparaison ${node.container} (référence) → ${b.container} (cible)`, `Comparison ${node.container} (reference) → ${b.container} (target)`),
           {
-            columns: ['Table', 'Objet', 'Nom', 'Écart', 'Détail'],
+            columns: [t('Table', 'Table'), t('Objet', 'Object'), t('Nom', 'Name'), t('Écart', 'Difference'), t('Détail', 'Detail')],
             rows: diff.items.map((i) => [i.table, what[i.object], i.name, label[i.change], i.detail]),
             rowCount: diff.items.length,
             truncated: false,
@@ -929,10 +943,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
         updateStatus();
         if (diff.items.length === 0) {
-          vscode.window.showInformationMessage('Aucune différence de structure.');
+          vscode.window.showInformationMessage(t('Aucune différence de structure.', 'No structural differences.'));
         }
       } catch (err) {
-        vscode.window.showErrorMessage(`Comparaison impossible : ${errorMessage(err)}`);
+        vscode.window.showErrorMessage(t(`Comparaison impossible : ${errorMessage(err)}`, `Comparison failed: ${errorMessage(err)}`));
       }
     }),
 
@@ -944,7 +958,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       const MAX_TABLES = 150;
       try {
         const built = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: `DB Explorer : diagramme de ${node.container}…` },
+          { location: vscode.ProgressLocation.Notification, title: t(`DB Explorer : diagramme de ${node.container}…`, `DB Explorer: diagram of ${node.container}…`) },
           async (progress) => {
             const driver = await mgr.getDriver(cfg.id);
             const all = (await driver.listTables(node.container)).filter((t) => !t.isView);
@@ -1003,7 +1017,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
             void previewTable(new TableNode(cfg, node.container, { name: table, isView: false })),
         );
       } catch (err) {
-        vscode.window.showErrorMessage(`Diagramme de ${node.container} : ${errorMessage(err)}`);
+        vscode.window.showErrorMessage(t(`Diagramme de ${node.container} : ${errorMessage(err)}`, `Diagram of ${node.container}: ${errorMessage(err)}`));
       }
     }),
 

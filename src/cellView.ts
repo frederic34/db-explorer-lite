@@ -1,5 +1,6 @@
 import { DbType } from './types';
 import { quoteIdent } from './util';
+import { t } from './i18n';
 
 export const MAX_BINARY_VIEW = 10 * 1024 * 1024;
 
@@ -16,9 +17,9 @@ export function sniffImage(b: Buffer): { mime: string; label: string } | undefin
   return undefined;
 }
 
-/** Taille annoncée par l'affichage d'une cellule binaire (`<binaire N octets>` ou `0x…`), sinon undefined. */
+/** Taille annoncée par l'affichage d'une cellule binaire (`<BLOB N B>` ou `0x…`), sinon undefined. */
 export function binarySize(shown: string): number | undefined {
-  const m = /^<binaire (\d+) octets>$/.exec(shown);
+  const m = /^<BLOB (\d+) B>$/.exec(shown);
   if (m) {
     return Number(m[1]);
   }
@@ -50,7 +51,7 @@ export function hexDump(b: Buffer, max = 4096): string {
     lines.push(`${i.toString(16).padStart(8, '0')}  ${hex}  ${txt}`);
   }
   if (b.length > n) {
-    lines.push(`… ${b.length - n} octets de plus`);
+    lines.push(t(`… ${b.length - n} octets de plus`, `… ${b.length - n} more bytes`));
   }
   return lines.join('\n') + '\n';
 }

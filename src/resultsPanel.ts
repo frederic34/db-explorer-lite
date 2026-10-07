@@ -1,4 +1,4 @@
-import { t, webviewI18n } from './i18n';
+import { isFrench, t, webviewI18n } from './i18n';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -259,7 +259,7 @@ const SCRIPT = String.raw`
     if (text !== undefined) { e.textContent = text; }
     return e;
   }
-  function plural(n, one, many) { return n + ' ' + (n > 1 ? many : one); }
+  function plural(n, one, many) { return n + ' ' + ((FR ? n > 1 : n !== 1) ? many : one); }
 
   var top = el('div', 'top');
   top.appendChild(el('strong', '', data.connection));
@@ -277,7 +277,7 @@ const SCRIPT = String.raw`
       var b = el('button', 'tab' + (i === data.activeSet ? ' active' : ''), t.label);
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', i === data.activeSet ? 'true' : 'false');
-      b.title = 'Résultat ' + t.label + ' : ' + t.title;
+      b.title = T('Résultat ' + t.label + ' : ' + t.title, 'Result ' + t.label + ': ' + t.title);
       b.appendChild(el('span', 'tabinfo', ' ' + t.title));
       b.addEventListener('click', function () {
         if (i !== data.activeSet) { vscode.postMessage({ type: 'selectSet', index: i, token: data.token }); }
@@ -288,7 +288,7 @@ const SCRIPT = String.raw`
   }
 
   var details = el('details', 'sql');
-  details.appendChild(el('summary', '', 'Requête'));
+  details.appendChild(el('summary', '', T('Requête', 'Query')));
   var sqlPre = el('pre', '', data.sql);
   details.appendChild(sqlPre);
   root.appendChild(details);
@@ -314,32 +314,35 @@ const SCRIPT = String.raw`
   var inserting = null;
 
   if (!edit && data.readOnlyReason) {
-    root.appendChild(el('div', 'muted top', 'Lecture seule : ' + data.readOnlyReason + '.'));
+    root.appendChild(el('div', 'muted top', T('Lecture seule : ' + data.readOnlyReason + '.', 'Read-only: ' + data.readOnlyReason + '.')));
   }
 
   var bar = el('div', 'bar');
   var filter = el('input');
   filter.type = 'search';
-  filter.placeholder = server ? 'Filtrer (toute la table) : texte, ou prix > 20 ; nom contient x' : 'Filtrer les lignes…';
+  filter.placeholder = server
+    ? T('Filtrer (toute la table) : texte, ou prix > 20 ; nom contient x', 'Filter (whole table): text, or price > 20; name contains x')
+    : T('Filtrer les lignes…', 'Filter rows…');
   if (server) { filter.value = data.browse.filter; }
   var info = el('span', 'muted');
   var spacer = el('span', 'spacer');
   var delBtn = null;
   var addBtn = null;
   if (edit) {
-    delBtn = el('button', 'danger', 'Supprimer la sélection');
-    if (!edit.noInsert) { addBtn = el('button', 'primary', 'Ajouter une ligne'); }
+    delBtn = el('button', 'danger', T('Supprimer la sélection', 'Delete selection'));
+    if (!edit.noInsert) { addBtn = el('button', 'primary', T('Ajouter une ligne', 'Add row')); }
   }
-  var exportBtn = el('button', '', 'Exporter…');
-  exportBtn.title = 'Exporter en CSV, JSON ou instructions INSERT';
+  var exportBtn = el('button', '', T('Exporter…', 'Export…'));
+  exportBtn.title = T('Exporter en CSV, JSON ou instructions INSERT', 'Export as CSV, JSON or INSERT statements');
   exportBtn.addEventListener('click', function () { vscode.postMessage({ type: 'export', token: data.token }); });
   bar.appendChild(filter);
   bar.appendChild(info);
   bar.appendChild(spacer);
   if (addBtn) { bar.appendChild(addBtn); }
   if (delBtn) { bar.appendChild(delBtn); }
-  var copyBtn = el('button', '', 'Copier…');
-  copyBtn.title = 'Copier les lignes cochées (ou toutes les lignes affichées) : tableur, Markdown, JSON, INSERT, CSV';
+  var copyBtn = el('button', '', T('Copier…', 'Copy…'));
+  copyBtn.title = T('Copier les lignes cochées (ou toutes les lignes affichées) : tableur, Markdown, JSON, INSERT, CSV',
+    'Copy the checked rows (or all displayed rows): spreadsheet, Markdown, JSON, INSERT, CSV');
   copyBtn.addEventListener('click', function () {
     var idx = selectedCount() > 0
       ? Object.keys(selected).map(Number).sort(function (a, b) { return a - b; })
@@ -360,7 +363,7 @@ const SCRIPT = String.raw`
     navBar.style.display = '';
     if (b.back) {
       var back = el('button', '', '← ' + b.back);
-      back.title = 'Revenir à la table précédente';
+      back.title = T('Revenir à la table précédente', 'Back to the previous table');
       back.addEventListener('click', function () { vscode.postMessage({ type: 'back', token: data.token }); });
       navBar.appendChild(back);
     }
@@ -368,8 +371,8 @@ const SCRIPT = String.raw`
       var chip = el('span', 'chip');
       chip.appendChild(document.createTextNode(b.where.column + ' = ' + b.where.value));
       var x = el('button', 'icon', '✕');
-      x.title = 'Retirer ce filtre (afficher toute la table)';
-      x.setAttribute('aria-label', 'Retirer le filtre ' + b.where.column);
+      x.title = T('Retirer ce filtre (afficher toute la table)', 'Remove this filter (show the whole table)');
+      x.setAttribute('aria-label', T('Retirer le filtre ' + b.where.column, 'Remove filter ' + b.where.column));
       x.addEventListener('click', function () { ask({ where: null }); });
       chip.appendChild(x);
       navBar.appendChild(chip);
@@ -382,23 +385,23 @@ const SCRIPT = String.raw`
     m.type = 'browse';
     m.token = data.token;
     vscode.postMessage(m);
-    pos.textContent = 'Chargement…';
+    pos.textContent = T('Chargement…', 'Loading…');
   }
   if (server) {
     pagerBar = el('div', 'bar');
     var pg = el('div', 'pager');
     firstBtn = el('button', '', '⏮');
-    firstBtn.title = 'Première page';
+    firstBtn.title = T('Première page', 'First page');
     prevBtn = el('button', '', '◀');
-    prevBtn.title = 'Page précédente';
+    prevBtn.title = T('Page précédente', 'Previous page');
     nextBtn = el('button', '', '▶');
-    nextBtn.title = 'Page suivante';
+    nextBtn.title = T('Page suivante', 'Next page');
     refreshBtn = el('button', '', '⟳');
-    refreshBtn.title = 'Actualiser';
+    refreshBtn.title = T('Actualiser', 'Refresh');
     pos = el('span', 'muted pos');
     sizeSel = el('select');
-    sizeSel.title = 'Lignes par page';
-    sizeSel.setAttribute('aria-label', 'Lignes par page');
+    sizeSel.title = T('Lignes par page', 'Rows per page');
+    sizeSel.setAttribute('aria-label', T('Lignes par page', 'Rows per page'));
     [firstBtn, prevBtn, nextBtn, refreshBtn].forEach(function (b) { b.setAttribute('aria-label', b.title); });
     firstBtn.addEventListener('click', function () { ask({ page: 'first' }); });
     prevBtn.addEventListener('click', function () { ask({ page: 'prev' }); });
@@ -408,7 +411,7 @@ const SCRIPT = String.raw`
     pg.appendChild(firstBtn); pg.appendChild(prevBtn); pg.appendChild(pos);
     pg.appendChild(nextBtn); pg.appendChild(refreshBtn);
     pagerBar.appendChild(pg);
-    var sz = el('span', 'muted', 'Lignes par page');
+    var sz = el('span', 'muted', T('Lignes par page', 'Rows per page'));
     pagerBar.appendChild(sz);
     pagerBar.appendChild(sizeSel);
     root.appendChild(pagerBar);
@@ -430,11 +433,11 @@ const SCRIPT = String.raw`
       sizeSel.appendChild(o);
     });
     var totalTxt;
-    if (typeof b.total === 'number') { totalTxt = ' sur ' + b.total; }
-    else if (b.total === undefined) { totalTxt = ' sur …'; }
-    else { totalTxt = b.hasNext ? ' (et plus)' : ''; }
-    if (rows.length === 0) { pos.textContent = b.offset > 0 ? 'Page vide' : 'Aucune ligne'; }
-    else { pos.textContent = 'Lignes ' + (b.offset + 1) + '–' + (b.offset + rows.length) + totalTxt; }
+    if (typeof b.total === 'number') { totalTxt = T(' sur ' + b.total, ' of ' + b.total); }
+    else if (b.total === undefined) { totalTxt = T(' sur …', ' of …'); }
+    else { totalTxt = b.hasNext ? T(' (et plus)', ' (and more)') : ''; }
+    if (rows.length === 0) { pos.textContent = b.offset > 0 ? T('Page vide', 'Empty page') : T('Aucune ligne', 'No rows'); }
+    else { pos.textContent = T('Lignes ', 'Rows ') + (b.offset + 1) + '–' + (b.offset + rows.length) + totalTxt; }
   }
 
   var opmsg = el('div');
@@ -463,15 +466,15 @@ const SCRIPT = String.raw`
     var thA = el('th', 'actions');
     selectAll = el('input');
     selectAll.type = 'checkbox';
-    selectAll.title = 'Tout sélectionner (lignes affichées)';
-    selectAll.setAttribute('aria-label', 'Tout sélectionner');
+    selectAll.title = T('Tout sélectionner (lignes affichées)', 'Select all (displayed rows)');
+    selectAll.setAttribute('aria-label', T('Tout sélectionner', 'Select all'));
     thA.appendChild(selectAll);
     hr.appendChild(thA);
   }
   hr.appendChild(el('th', 'rownum', '#'));
   var ths = data.columns.map(function (name, i) {
     var th = el('th', 'sortable', name);
-    th.title = 'Trier par cette colonne';
+    th.title = T('Trier par cette colonne', 'Sort by this column');
     th.addEventListener('click', function () {
       if (server) {
         // asc -> desc -> sans tri (ordre de la clé primaire), exécuté par le serveur.
@@ -498,7 +501,7 @@ const SCRIPT = String.raw`
   function updateHeaders() {
     ths.forEach(function (th, i) {
       var key = edit && edit.pk.indexOf(i) !== -1 ? '🔑 ' : (fks[i] ? '↗ ' : '');
-      if (fks[i]) { th.title = 'Clé étrangère → ' + fks[i].table + '.' + fks[i].column; }
+      if (fks[i]) { th.title = T('Clé étrangère → ', 'Foreign key → ') + fks[i].table + '.' + fks[i].column; }
       th.textContent = key + data.columns[i] + (sortCol === i ? (asc ? ' ▲' : ' ▼') : '');
     });
   }
@@ -514,11 +517,11 @@ const SCRIPT = String.raw`
   function updateBar() {
     var vis = visibleRows();
     updatePager();
-    info.textContent = server ? '' : term ? vis.length + ' / ' + rows.length + ' lignes affichées' : '';
+    info.textContent = server ? '' : term ? vis.length + ' / ' + rows.length + T(' lignes affichées', ' rows shown') : '';
     if (edit) {
       if (addBtn) { addBtn.disabled = busy; }
       var n = selectedCount();
-      delBtn.textContent = n > 0 ? 'Supprimer la sélection (' + n + ')' : 'Supprimer la sélection';
+      delBtn.textContent = n > 0 ? T('Supprimer la sélection (' + n + ')', 'Delete selection (' + n + ')') : T('Supprimer la sélection', 'Delete selection');
       delBtn.disabled = busy || n === 0;
       var all = vis.length > 0 && vis.every(function (r) { return selected[r.i]; });
       selectAll.checked = all;
@@ -526,8 +529,8 @@ const SCRIPT = String.raw`
       selectAll.disabled = busy || vis.length === 0;
     }
     var extra = '';
-    if (insertedCount > 0) { extra += ' · ' + plural(insertedCount, 'ligne ajoutée', 'lignes ajoutées'); }
-    if (deletedCount > 0) { extra += ' · ' + plural(deletedCount, 'ligne supprimée', 'lignes supprimées'); }
+    if (insertedCount > 0) { extra += ' · ' + plural(insertedCount, T('ligne ajoutée', 'row added'), T('lignes ajoutées', 'rows added')); }
+    if (deletedCount > 0) { extra += ' · ' + plural(deletedCount, T('ligne supprimée', 'row deleted'), T('lignes supprimées', 'rows deleted')); }
     summary.textContent = ' · ' + data.summary + extra;
   }
 
@@ -536,7 +539,7 @@ const SCRIPT = String.raw`
     if (r && c.length < 2000 && /^https?:[/][/][^ \t\r\n]+$/i.test(c)) {
       var a = el('a', 'urll', c);
       a.href = '#';
-      a.title = 'Ouvrir ' + c.slice(0, 200);
+      a.title = T('Ouvrir ', 'Open ') + c.slice(0, 200);
       a.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -547,9 +550,9 @@ const SCRIPT = String.raw`
     }
     td.textContent = c;
     if (c.length > 60) { td.title = c.length > 1000 ? c.slice(0, 1000) + '…' : c; }
-    if (r && (c.length > 60 || c.indexOf('\n') !== -1 || /^<binaire [0-9]+ octets>$/.test(c) || /^0x[0-9a-fA-F]{8,}$/.test(c))) {
+    if (r && (c.length > 60 || c.indexOf('\n') !== -1 || /^<BLOB [0-9]+ B>$/.test(c) || /^0x[0-9a-fA-F]{8,}$/.test(c))) {
       td.classList.add('viewable');
-      td.title = (c.length > 1000 ? c.slice(0, 1000) + '…' : c) + '\n(double-clic : voir la valeur)';
+      td.title = (c.length > 1000 ? c.slice(0, 1000) + '…' : c) + T('\n(double-clic : voir la valeur)', '\n(double-click: view the value)');
     }
   }
 
@@ -583,14 +586,14 @@ const SCRIPT = String.raw`
       input.classList.add('mono');
       var fmt = el('button', 'icon', '{ }');
       fmt.type = 'button';
-      fmt.title = 'Mettre en forme (indenter) le JSON';
-      fmt.setAttribute('aria-label', 'Mettre en forme le JSON');
+      fmt.title = T('Mettre en forme (indenter) le JSON', 'Format (indent) the JSON');
+      fmt.setAttribute('aria-label', T('Mettre en forme le JSON', 'Format the JSON'));
       fmt.disabled = busy;
       var check = function () {
         var t = input.value.trim();
         var p = t === '' ? '' : jsonProblem(t);
         input.classList.toggle('invalid', p !== '');
-        input.title = p ? 'JSON invalide : ' + p : 'Ctrl+Entrée pour enregistrer';
+        input.title = p ? T('JSON invalide : ', 'Invalid JSON: ') + p : T('Ctrl+Entrée pour enregistrer', 'Ctrl+Enter to save');
       };
       input.addEventListener('input', check);
       fmt.addEventListener('click', function () {
@@ -606,7 +609,7 @@ const SCRIPT = String.raw`
     pick.type = kind === 'date' ? 'date' : (kind === 'time' ? 'time' : 'datetime-local');
     if (kind !== 'date') { pick.step = '1'; }
     pick.disabled = busy;
-    pick.setAttribute('aria-label', data.columns[j] + ' (sélecteur)');
+    pick.setAttribute('aria-label', data.columns[j] + T(' (sélecteur)', ' (picker)'));
     var sync = function () {
       var t = input.value.trim();
       pick.value = re.test(t) ? (kind === 'datetime' ? t.replace(' ', 'T') : t) : '';
@@ -623,8 +626,8 @@ const SCRIPT = String.raw`
     });
     var now = el('button', 'icon', '⏱');
     now.type = 'button';
-    now.title = 'Maintenant';
-    now.setAttribute('aria-label', 'Mettre la date et l’heure actuelles');
+    now.title = T('Maintenant', 'Now');
+    now.setAttribute('aria-label', T('Mettre la date et l’heure actuelles', 'Set the current date and time'));
     now.disabled = busy;
     now.addEventListener('click', function () { input.value = nowText(kind); fire(); });
     box.appendChild(pick);
@@ -668,13 +671,13 @@ const SCRIPT = String.raw`
       if (v !== null && kindOf(j) === 'json') {
         if (r.c[j] !== null && sameJson(v, r.c[j])) { return; }  // seulement mis en forme : pas une modification
         var pb = jsonProblem(v);
-        if (pb && !bad) { bad = 'JSON invalide pour « ' + data.columns[j] + ' » : ' + pb; }
+        if (pb && !bad) { bad = T('JSON invalide pour « ' + data.columns[j] + ' » : ' + pb, 'Invalid JSON for “' + data.columns[j] + '”: ' + pb); }
       }
       if (v !== r.c[j]) { changes[j] = v; count++; }
     });
     if (bad) { showOp('ko', bad); return; }
     if (count === 0) { cancelEdit(); return; }
-    showOp('busy', 'Enregistrement…');
+    showOp('busy', T('Enregistrement…', 'Saving…'));
     vscode.postMessage({ type: 'updateRow', token: data.token, rowIndex: editing.i, changes: changes });
     setBusy(true);
   }
@@ -683,13 +686,13 @@ const SCRIPT = String.raw`
     var tr = el('tr', 'editing');
     var ta = el('td', 'actions');
     var ok = el('button', 'icon', '✓');
-    ok.title = 'Enregistrer la ligne (Entrée)';
-    ok.setAttribute('aria-label', 'Enregistrer la ligne');
+    ok.title = T('Enregistrer la ligne (Entrée)', 'Save the row (Enter)');
+    ok.setAttribute('aria-label', T('Enregistrer la ligne', 'Save the row'));
     ok.disabled = busy;
     ok.addEventListener('click', saveEdit);
     var ko = el('button', 'icon', '✗');
-    ko.title = 'Annuler (Échap)';
-    ko.setAttribute('aria-label', 'Annuler la modification');
+    ko.title = T('Annuler (Échap)', 'Cancel (Esc)');
+    ko.setAttribute('aria-label', T('Annuler la modification', 'Cancel the edit'));
     ko.disabled = busy;
     ko.addEventListener('click', cancelEdit);
     ta.appendChild(ok);
@@ -700,7 +703,7 @@ const SCRIPT = String.raw`
       if (!edit.editable[j]) {
         var ro = el('td', edit.pk.indexOf(j) !== -1 ? 'pk' : 'readonlycell');
         cellText(ro, r.c[j]);
-        ro.title = edit.pk.indexOf(j) !== -1 ? 'Clé primaire : non modifiable' : 'Colonne non modifiable';
+        ro.title = edit.pk.indexOf(j) !== -1 ? T('Clé primaire : non modifiable', 'Primary key: read-only') : T('Colonne non modifiable', 'Read-only column');
         tr.appendChild(ro);
         return;
       }
@@ -779,7 +782,7 @@ const SCRIPT = String.raw`
       if (!edit.insertable[j]) { continue; }
       var c = inserting.cols[j];
       if (c.mode === 'required') {
-        showOp('ko', 'La colonne « ' + data.columns[j] + ' » est obligatoire.');
+        showOp('ko', T('La colonne « ' + data.columns[j] + ' » est obligatoire.', 'Column “' + data.columns[j] + '” is required.'));
         var field = tbody.querySelector('tr.inserting td:nth-child(' + (j + 3) + ') textarea');
         if (field) { field.focus(); }
         return;
@@ -787,14 +790,14 @@ const SCRIPT = String.raw`
       if (c.mode === 'value' && kindOf(j) === 'json') {
         var pj = jsonProblem(c.val);
         if (pj) {
-          showOp('ko', 'JSON invalide pour « ' + data.columns[j] + ' » : ' + pj);
+          showOp('ko', T('JSON invalide pour « ' + data.columns[j] + ' » : ' + pj, 'Invalid JSON for “' + data.columns[j] + '”: ' + pj));
           return;
         }
       }
       if (c.mode === 'value') { values[j] = c.val; }
       else if (c.mode === 'null') { values[j] = null; }
     }
-    showOp('busy', 'Insertion…');
+    showOp('busy', T('Insertion…', 'Inserting…'));
     vscode.postMessage({ type: 'insertRow', token: data.token, values: values });
     setBusy(true);
   }
@@ -803,13 +806,13 @@ const SCRIPT = String.raw`
     var tr = el('tr', 'editing inserting');
     var ta = el('td', 'actions');
     var ok = el('button', 'icon', '✓');
-    ok.title = 'Insérer la ligne (Entrée)';
-    ok.setAttribute('aria-label', 'Insérer la ligne');
+    ok.title = T('Insérer la ligne (Entrée)', 'Insert the row (Enter)');
+    ok.setAttribute('aria-label', T('Insérer la ligne', 'Insert the row'));
     ok.disabled = busy;
     ok.addEventListener('click', saveInsert);
     var ko = el('button', 'icon', '✗');
-    ko.title = 'Annuler (Échap)';
-    ko.setAttribute('aria-label', 'Annuler l’insertion');
+    ko.title = T('Annuler (Échap)', 'Cancel (Esc)');
+    ko.setAttribute('aria-label', T('Annuler l’insertion', 'Cancel the insertion'));
     ko.disabled = busy;
     ko.addEventListener('click', cancelInsert);
     ta.appendChild(ok);
@@ -819,7 +822,7 @@ const SCRIPT = String.raw`
     data.columns.forEach(function (_name, j) {
       if (!edit.insertable[j]) {
         var ro = el('td', 'readonlycell', '—');
-        ro.title = 'Valeur fournie par le serveur, ou type non pris en charge';
+        ro.title = T('Valeur fournie par le serveur, ou type non pris en charge', 'Value supplied by the server, or unsupported type');
         tr.appendChild(ro);
         return;
       }
@@ -832,7 +835,7 @@ const SCRIPT = String.raw`
       input.spellcheck = false;
       input.disabled = busy;
       input.setAttribute('aria-label', data.columns[j]);
-      input.placeholder = edit.hasDefault[j] ? '(défaut)' : (edit.nullable[j] ? 'NULL' : '(obligatoire)');
+      input.placeholder = edit.hasDefault[j] ? T('(défaut)', '(default)') : (edit.nullable[j] ? 'NULL' : T('(obligatoire)', '(required)'));
       var flags = el('div', 'flags');
       var defBox = null;
       var nulBox = null;
@@ -847,7 +850,7 @@ const SCRIPT = String.raw`
         flags.appendChild(lab);
         return cb;
       }
-      if (edit.hasDefault[j]) { defBox = mk('défaut', c.mode === 'default'); }
+      if (edit.hasDefault[j]) { defBox = mk(T('défaut', 'default'), c.mode === 'default'); }
       if (edit.nullable[j]) { nulBox = mk('NULL', c.mode === 'null'); }
       function sync() {
         if (defBox) { defBox.checked = c.mode === 'default'; }
@@ -889,8 +892,8 @@ const SCRIPT = String.raw`
   function refLink(r, j) {
     var a = el('a', 'refl', '↩');
     a.href = '#';
-    a.title = 'Lignes d’autres tables qui référencent cette valeur';
-    a.setAttribute('aria-label', 'Voir les lignes qui référencent cette valeur');
+    a.title = T('Lignes d’autres tables qui référencent cette valeur', 'Rows from other tables that reference this value');
+    a.setAttribute('aria-label', T('Voir les lignes qui référencent cette valeur', 'Show the rows that reference this value'));
     a.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -903,12 +906,12 @@ const SCRIPT = String.raw`
   function fkLink(r, j) {
     var a = el('a', 'fkl', r.c[j]);
     a.href = '#';
-    a.title = 'Ouvrir ' + fks[j].table + ' où ' + fks[j].column + ' = ' + r.c[j];
+    a.title = T('Ouvrir ' + fks[j].table + ' où ' + fks[j].column + ' = ' + r.c[j], 'Open ' + fks[j].table + ' where ' + fks[j].column + ' = ' + r.c[j]);
     a.addEventListener('click', function (e) {
       e.preventDefault();
       if (busy) { return; }
       vscode.postMessage({ type: 'followFk', token: data.token, rowIndex: r.i, col: j });
-      showOp('busy', 'Ouverture de ' + fks[j].table + '…');
+      showOp('busy', T('Ouverture de ' + fks[j].table + '…', 'Opening ' + fks[j].table + '…'));
     });
     return a;
   }
@@ -923,15 +926,15 @@ const SCRIPT = String.raw`
       cb.type = 'checkbox';
       cb.checked = !!selected[r.i];
       cb.disabled = busy;
-      cb.setAttribute('aria-label', 'Sélectionner la ligne ' + n);
+      cb.setAttribute('aria-label', T('Sélectionner la ligne ' + n, 'Select row ' + n));
       cb.addEventListener('change', function () {
         if (cb.checked) { selected[r.i] = true; } else { delete selected[r.i]; }
         tr.className = cb.checked ? 'selected' : '';
         updateBar();
       });
       var pen = el('button', 'icon', '✎');
-      pen.title = 'Modifier la ligne';
-      pen.setAttribute('aria-label', 'Modifier la ligne ' + n);
+      pen.title = T('Modifier la ligne', 'Edit row');
+      pen.setAttribute('aria-label', T('Modifier la ligne ' + n, 'Edit row ' + n));
       pen.disabled = busy;
       pen.addEventListener('click', function () { startEdit(r.i); });
       ta.appendChild(cb);
@@ -1041,19 +1044,19 @@ const SCRIPT = String.raw`
       var target = rows.filter(function (x) { return x.i === m.rowIndex; })[0];
       if (target) { target.c = m.values; }
       editing = null;
-      showOp('ok', 'Ligne enregistrée.');
+      showOp('ok', T('Ligne enregistrée.', 'Row saved.'));
     } else if (m.op === 'delete') {
       var gone = {};
       m.rowIndexes.forEach(function (i) { gone[i] = true; delete selected[i]; });
       rows = rows.filter(function (x) { return !gone[x.i]; });
       deletedCount += m.rowIndexes.length;
       if (editing && gone[editing.i]) { editing = null; }
-      showOp('ok', plural(m.rowIndexes.length, 'ligne supprimée', 'lignes supprimées') + '.');
+      showOp('ok', plural(m.rowIndexes.length, T('ligne supprimée', 'row deleted'), T('lignes supprimées', 'rows deleted')) + '.');
     } else if (m.op === 'insert') {
       if (m.row) { rows.unshift({ i: m.rowIndex, c: m.row }); }
       insertedCount++;
       inserting = null;
-      showOp('ok', m.message || 'Ligne ajoutée.');
+      showOp('ok', m.message || T('Ligne ajoutée.', 'Row added.'));
     }
     renderBody();
   });
@@ -1067,7 +1070,7 @@ const SCRIPT = String.raw`
 `;
 
 function plural(n: number, one: string, many: string): string {
-  return `${n} ${n > 1 ? many : one}`;
+  return `${n} ${(isFrench() ? n > 1 : n !== 1) ? many : one}`;
 }
 
 /** Image d'une colonne binaire dans un volet à part (aucun script : la page ne contient que l'image). */
@@ -1120,10 +1123,13 @@ export class ResultsPanel {
     this.renderResult(m.connection, m.sql, set, m.badges, m.dbType, {
       sets: m.sets.map((r, i) => ({
         label: `${i + 1}`,
-        title: r.columns.length > 0 ? `${plural(r.rowCount, 'ligne', 'lignes')}` : `${r.command ?? 'OK'} · ${plural(r.affectedRows ?? 0, 'ligne affectée', 'lignes affectées')}`,
+        title:
+          r.columns.length > 0
+            ? `${plural(r.rowCount, t('ligne', 'row'), t('lignes', 'rows'))}`
+            : `${r.command ?? 'OK'} · ${plural(r.affectedRows ?? 0, t('ligne affectée', 'row affected'), t('lignes affectées', 'rows affected'))}`,
       })),
       activeSet: index,
-      position: `Résultat ${index + 1}/${m.sets.length}`,
+      position: t(`Résultat ${index + 1}/${m.sets.length}`, `Result ${index + 1}/${m.sets.length}`),
     });
   }
 
@@ -1138,18 +1144,21 @@ export class ResultsPanel {
   ): void {
     let summary: string;
     if (result.columns.length > 0) {
-      summary = plural(result.rowCount, 'ligne', 'lignes');
+      summary = plural(result.rowCount, t('ligne', 'row'), t('lignes', 'rows'));
       if (result.truncated) {
-        summary += ` (affichage limité aux ${result.rows.length} premières)`;
+        summary += t(` (affichage limité aux ${result.rows.length} premières)`, ` (display limited to the first ${result.rows.length})`);
       }
     } else {
       const cmd = result.command ? `${result.command} · ` : '';
-      summary = `${cmd}${plural(result.affectedRows ?? 0, 'ligne affectée', 'lignes affectées')}`;
+      summary = `${cmd}${plural(result.affectedRows ?? 0, t('ligne affectée', 'row affected'), t('lignes affectées', 'rows affected'))}`;
     }
     if (multi) {
       summary = `${multi.position} · ${summary}`;
     } else if (result.statements && result.statements > 1) {
-      summary += ` · ${result.statements} instructions exécutées (résultat de la dernière)`;
+      summary += t(
+        ` · ${result.statements} instructions exécutées (résultat de la dernière)`,
+        ` · ${result.statements} statements executed (result of the last one)`,
+      );
     }
     if (result.durationMs > 0) {
       summary += ` · ${result.durationMs} ms`;
@@ -1160,7 +1169,7 @@ export class ResultsPanel {
     let readOnlyReason: string | undefined;
     if (editable && result.columns.length > 0) {
       if (editable.readOnly) {
-        readOnlyReason = 'connexion en lecture seule';
+        readOnlyReason = t('connexion en lecture seule', 'the connection is read-only');
       } else {
         const planned = planEditing(editable.spec.dbType, result.columns, editable.spec.tableColumns);
         if ('plan' in planned) {
@@ -1219,7 +1228,11 @@ export class ResultsPanel {
     try {
       page = await this.fetchPage(b);
     } catch (err) {
-      this.showError(src.connectionName, `Aperçu de ${src.container}.${src.table}`, errorMessage(err));
+      this.showError(
+        src.connectionName,
+        t(`Aperçu de ${src.container}.${src.table}`, `Preview of ${src.container}.${src.table}`),
+        errorMessage(err),
+      );
       return;
     }
     b.hasNext = page.hasNext;
@@ -1239,9 +1252,9 @@ export class ResultsPanel {
     let editInfo: EditInfo | undefined;
     let readOnlyReason: string | undefined;
     if (src.readOnly) {
-      readOnlyReason = 'connexion en lecture seule';
+      readOnlyReason = t('connexion en lecture seule', 'the connection is read-only');
     } else if (src.isView) {
-      readOnlyReason = 'les vues ne sont pas modifiables';
+      readOnlyReason = t('les vues ne sont pas modifiables', 'views cannot be edited');
     } else {
       const planned = planEditing(src.dbType, page.columns, src.tableColumns);
       if ('plan' in planned) {
@@ -1307,12 +1320,12 @@ export class ResultsPanel {
       rows: res.rows.slice(0, b.pageSize),
       hasNext: res.rows.length > b.pageSize,
       durationMs: res.durationMs,
-      sql: b.filter ? `${query.sql}\n-- filtre : « ${b.filter} »` : query.sql,
+      sql: b.filter ? `${query.sql}\n${t(`-- filtre : « ${b.filter} »`, `-- filter: “${b.filter}”`)}` : query.sql,
     };
   }
 
   private pageSummary(page: Page): string {
-    return `${plural(page.rows.length, 'ligne', 'lignes')} · ${page.durationMs} ms`;
+    return `${plural(page.rows.length, t('ligne', 'row'), t('lignes', 'rows'))} · ${page.durationMs} ms`;
   }
 
   private browseInfo(b: BrowseState): BrowseInfo {
@@ -1401,7 +1414,7 @@ export class ResultsPanel {
 
     if (msg.pageSize !== undefined) {
       if (typeof msg.pageSize !== 'number' || !Number.isInteger(msg.pageSize) || msg.pageSize < 1) {
-        return failPage('Taille de page invalide.');
+        return failPage(t('Taille de page invalide.', 'Invalid page size.'));
       }
       const size = this.clampPageSize(msg.pageSize);
       if (size !== b.pageSize) {
@@ -1423,13 +1436,13 @@ export class ResultsPanel {
       ) {
         next.sort = { col: s.col, dir: s.dir };
       } else {
-        return failPage('Tri invalide.');
+        return failPage(t('Tri invalide.', 'Invalid sort.'));
       }
       next.offset = 0;
     }
     if (msg.filter !== undefined) {
       if (typeof msg.filter !== 'string') {
-        return failPage('Filtre invalide.');
+        return failPage(t('Filtre invalide.', 'Invalid filter.'));
       }
       const filter = msg.filter.trim().slice(0, 200);
       if (filter !== b.filter) {
@@ -1441,7 +1454,7 @@ export class ResultsPanel {
     if ('where' in msg) {
       // Seul le retrait du filtre d'égalité vient de la page ; sa pose passe par followFk.
       if (msg.where !== null) {
-        return failPage('Filtre invalide.');
+        return failPage(t('Filtre invalide.', 'Invalid filter.'));
       }
       next.where = undefined;
       next.offset = 0;
@@ -1452,7 +1465,7 @@ export class ResultsPanel {
     }
     if (msg.page === 'next') {
       if (!b.hasNext) {
-        return failPage("Il n'y a pas de page suivante.");
+        return failPage(t("Il n'y a pas de page suivante.", 'There is no next page.'));
       }
       const ks = keysetColumns({
         dbType: b.src.dbType,
@@ -1519,7 +1532,7 @@ export class ResultsPanel {
       const driver = await b.src.getDriver();
       const all = (await driver.listReferrers(b.src.container, b.src.table)).filter((r) => r.refColumn === column);
       if (all.length === 0) {
-        vscode.window.showInformationMessage('Aucune table ne référence cette colonne.');
+        vscode.window.showInformationMessage(t('Aucune table ne référence cette colonne.', 'No table references this column.'));
         return;
       }
       const shown = all.slice(0, 25);
@@ -1542,11 +1555,17 @@ export class ResultsPanel {
       const pick = await vscode.window.showQuickPick(
         shown.map((r, i) => ({
           label: `${r.container !== b.src.container ? r.container + '.' : ''}${r.table}.${r.column}`,
-          description: counts[i] === undefined ? 'comptage impossible' : plural(counts[i] as number, 'ligne', 'lignes'),
+          description:
+            counts[i] === undefined
+              ? t('comptage impossible', 'count unavailable')
+              : plural(counts[i] as number, t('ligne', 'row'), t('lignes', 'rows')),
           ref: r,
         })),
         {
-          placeHolder: `Lignes qui référencent ${b.src.table}.${column} = ${cell.value.slice(0, 40)}${all.length > shown.length ? ` (${all.length - shown.length} autres tables non listées)` : ''}`,
+          placeHolder: t(
+            `Lignes qui référencent ${b.src.table}.${column} = ${cell.value.slice(0, 40)}${all.length > shown.length ? ` (${all.length - shown.length} autres tables non listées)` : ''}`,
+            `Rows referencing ${b.src.table}.${column} = ${cell.value.slice(0, 40)}${all.length > shown.length ? ` (${all.length - shown.length} other tables not listed)` : ''}`,
+          ),
         },
       );
       if (!pick || this.last !== st) {
@@ -1570,7 +1589,7 @@ export class ResultsPanel {
         { where: { col: refCol, value: cell.value }, nav: [...(st.nav ?? []), frame].slice(-20) },
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Lecture des références impossible : ${errorMessage(err)}`);
+      vscode.window.showErrorMessage(t(`Lecture des références impossible : ${errorMessage(err)}`, `Could not read the references: ${errorMessage(err)}`));
     }
   }
 
@@ -1589,7 +1608,7 @@ export class ResultsPanel {
     const row = typeof msg.rowIndex === 'number' ? st.rows[msg.rowIndex] : undefined;
     const value = row && typeof col === 'number' ? row[col] : undefined;
     if (!ref || value === null || value === undefined) {
-      return fail("Cette valeur n'est pas une clé étrangère suivie.");
+      return fail(t("Cette valeur n'est pas une clé étrangère suivie.", 'This value is not a followed foreign key.'));
     }
     try {
       const driver = await b.src.getDriver();
@@ -1602,7 +1621,7 @@ export class ResultsPanel {
       }
       const refCol = cols.findIndex((c) => c.name === ref.column);
       if (refCol < 0) {
-        return fail(`Colonne « ${ref.column} » introuvable dans ${ref.table}.`);
+        return fail(t(`Colonne « ${ref.column} » introuvable dans ${ref.table}.`, `Column “${ref.column}” not found in ${ref.table}.`));
       }
       const frame: NavFrame = {
         src: b.src,
@@ -1649,7 +1668,7 @@ export class ResultsPanel {
       sql,
       columns: [],
       rows: [],
-      summary: 'erreur',
+      summary: t('erreur', 'error'),
       error: message,
       badges,
     });
@@ -1661,7 +1680,7 @@ export class ResultsPanel {
     if (!this.panel) {
       this.panel = vscode.window.createWebviewPanel(
         'dbExplorer.results',
-        'Résultats SQL',
+        t('Résultats SQL', 'SQL Results'),
         { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
         { enableScripts: true, retainContextWhenHidden: true },
       );
@@ -1746,10 +1765,10 @@ export class ResultsPanel {
     if (!vscode.workspace.getConfiguration('dbExplorer').get<boolean>('confirmOnProduction', true)) {
       return true;
     }
-    const go = 'Confirmer';
+    const go = t('Confirmer', 'Confirm');
     const choice = await vscode.window.showWarningMessage(
-      `⚠ PRODUCTION : ${message}`,
-      { modal: true, detail: 'Vous êtes connecté à une base de production.' },
+      t(`⚠ PRODUCTION : ${message}`, `⚠ PRODUCTION: ${message}`),
+      { modal: true, detail: t('Vous êtes connecté à une base de production.', 'You are connected to a production database.') },
       go,
     );
     return choice === go;
@@ -1759,10 +1778,10 @@ export class ResultsPanel {
     const fail = (message: string) => this.reply(token, { op: 'insert', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan || st.noInsert) {
-      return fail("Insertion impossible : ce résultat n'est pas modifiable.");
+      return fail(t("Insertion impossible : ce résultat n'est pas modifiable.", 'Cannot insert: this result is not editable.'));
     }
     if (typeof values !== 'object' || values === null) {
-      return fail('Valeurs invalides.');
+      return fail(t('Valeurs invalides.', 'Invalid values.'));
     }
     const { spec, plan } = st;
     const rows = st.rows;
@@ -1772,19 +1791,19 @@ export class ResultsPanel {
     for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
       const j = Number(key);
       if (!Number.isInteger(j) || j < 0 || j >= st.columns.length || !plan.insertable[j]) {
-        return fail(`La colonne « ${st.columns[j] ?? key} » ne peut pas être renseignée.`);
+        return fail(t(`La colonne « ${st.columns[j] ?? key} » ne peut pas être renseignée.`, `Column “${st.columns[j] ?? key}” cannot be set.`));
       }
       if (value !== null && typeof value !== 'string') {
-        return fail('Valeur invalide.');
+        return fail(t('Valeur invalide.', 'Invalid value.'));
       }
       if (value === null && !plan.nullable[j]) {
-        return fail(`La colonne « ${st.columns[j]} » n'accepte pas NULL.`);
+        return fail(t(`La colonne « ${st.columns[j]} » n'accepte pas NULL.`, `Column “${st.columns[j]}” does not accept NULL.`));
       }
       idx.push(j);
       vals.push(value);
     }
 
-    if (!(await this.confirmProduction(spec, `Insérer une ligne dans « ${spec.table} » ?`))) {
+    if (!(await this.confirmProduction(spec, t(`Insérer une ligne dans « ${spec.table} » ?`, `Insert a row into “${spec.table}”?`)))) {
       return this.reply(token, { op: 'insert', ok: false, cancelled: true });
     }
     try {
@@ -1826,7 +1845,7 @@ export class ResultsPanel {
         return this.reply(token, {
           op: 'insert',
           ok: true,
-          message: "Ligne insérée. Actualisez l'aperçu pour la voir.",
+          message: t("Ligne insérée. Actualisez l'aperçu pour la voir.", 'Row inserted. Refresh the preview to see it.'),
         });
       }
       rows.push(row);
@@ -1841,12 +1860,12 @@ export class ResultsPanel {
     const fail = (message: string) => this.reply(token, { op: 'update', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan) {
-      return fail("Modification impossible : ce résultat n'est pas modifiable.");
+      return fail(t("Modification impossible : ce résultat n'est pas modifiable.", 'Cannot update: this result is not editable.'));
     }
     const rows = st.rows;
     const row = typeof rowIndex === 'number' ? rows[rowIndex] : undefined;
     if (!row || typeof changes !== 'object' || changes === null) {
-      return fail('Ligne introuvable.');
+      return fail(t('Ligne introuvable.', 'Row not found.'));
     }
     const { spec, plan } = st;
 
@@ -1855,13 +1874,13 @@ export class ResultsPanel {
     for (const [key, value] of Object.entries(changes as Record<string, unknown>)) {
       const j = Number(key);
       if (!Number.isInteger(j) || j < 0 || j >= st.columns.length || !plan.editable[j]) {
-        return fail(`La colonne « ${st.columns[j] ?? key} » n'est pas modifiable.`);
+        return fail(t(`La colonne « ${st.columns[j] ?? key} » n'est pas modifiable.`, `Column “${st.columns[j] ?? key}” is not editable.`));
       }
       if (value !== null && typeof value !== 'string') {
-        return fail('Valeur invalide.');
+        return fail(t('Valeur invalide.', 'Invalid value.'));
       }
       if (value === null && !plan.nullable[j]) {
-        return fail(`La colonne « ${st.columns[j]} » n'accepte pas NULL.`);
+        return fail(t(`La colonne « ${st.columns[j]} » n'accepte pas NULL.`, `Column “${st.columns[j]}” does not accept NULL.`));
       }
       if (value !== row[j]) {
         setIdx.push(j);
@@ -1872,7 +1891,7 @@ export class ResultsPanel {
       return this.reply(token, { op: 'update', ok: true, rowIndex, values: row });
     }
 
-    if (!(await this.confirmProduction(spec, `Modifier 1 ligne de « ${spec.table} » ?`))) {
+    if (!(await this.confirmProduction(spec, t(`Modifier 1 ligne de « ${spec.table} » ?`, `Update 1 row of “${spec.table}”?`)))) {
       return this.reply(token, { op: 'update', ok: false, cancelled: true });
     }
     try {
@@ -1911,10 +1930,10 @@ export class ResultsPanel {
     const fail = (message: string) => this.reply(token, { op: 'delete', ok: false, message });
     const st = this.last;
     if (!st?.spec || !st.plan) {
-      return fail("Suppression impossible : ce résultat n'est pas modifiable.");
+      return fail(t("Suppression impossible : ce résultat n'est pas modifiable.", 'Cannot delete: this result is not editable.'));
     }
     if (!Array.isArray(rowIndexes)) {
-      return fail('Sélection invalide.');
+      return fail(t('Sélection invalide.', 'Invalid selection.'));
     }
     const { spec, plan } = st;
     const rows = st.rows;
@@ -1928,10 +1947,13 @@ export class ResultsPanel {
     // Clés primaires relevées AVANT la confirmation : ce sont celles que l'utilisateur a vues.
     const pkRows = indexes.map((i) => plan.pk.map((j) => (rows[i] as Row)[j]));
 
-    const remove = 'Supprimer';
+    const remove = t('Supprimer', 'Delete');
     const choice = await vscode.window.showWarningMessage(
-      `${spec.production ? '⚠ PRODUCTION : s' : 'S'}upprimer ${plural(indexes.length, 'ligne', 'lignes')} de « ${spec.table} » ?`,
-      { modal: true, detail: 'Cette action est irréversible.' },
+      t(
+        `${spec.production ? '⚠ PRODUCTION : s' : 'S'}upprimer ${plural(indexes.length, 'ligne', 'lignes')} de « ${spec.table} » ?`,
+        `${spec.production ? '⚠ PRODUCTION: d' : 'D'}elete ${plural(indexes.length, 'row', 'rows')} from “${spec.table}”?`,
+      ),
+      { modal: true, detail: t('Cette action est irréversible.', 'This action cannot be undone.') },
       remove,
     );
     if (choice !== remove) {
@@ -1995,11 +2017,21 @@ export class ResultsPanel {
     const pk = src?.tableColumns.filter((c) => c.primaryKey) ?? [];
     const pkIdx = pk.map((c) => st.columns.indexOf(c.name));
     if (!src || pk.length === 0 || pkIdx.some((i) => i < 0 || cell.row[i] === null)) {
-      vscode.window.showInformationMessage('La valeur binaire complète se lit par la clé primaire : cette table ou ce résultat n\'en a pas.');
+      vscode.window.showInformationMessage(
+        t(
+          'La valeur binaire complète se lit par la clé primaire : cette table ou ce résultat n\'en a pas.',
+          'The full binary value is read through the primary key: this table or result has none.',
+        ),
+      );
       return;
     }
     if (size > MAX_BINARY_VIEW) {
-      vscode.window.showInformationMessage(`Valeur trop volumineuse pour être affichée (${Math.round(size / 1048576)} Mo, maximum ${MAX_BINARY_VIEW / 1048576} Mo).`);
+      vscode.window.showInformationMessage(
+        t(
+          `Valeur trop volumineuse pour être affichée (${Math.round(size / 1048576)} Mo, maximum ${MAX_BINARY_VIEW / 1048576} Mo).`,
+          `Value too large to display (${Math.round(size / 1048576)} MB, maximum ${MAX_BINARY_VIEW / 1048576} MB).`,
+        ),
+      );
       return;
     }
     try {
@@ -2008,22 +2040,26 @@ export class ResultsPanel {
       const res = await driver.query(q, pkIdx.map((i) => cell.row[i]));
       const hex = res.rows[0]?.[0];
       if (typeof hex !== 'string') {
-        vscode.window.showInformationMessage('Ligne introuvable (supprimée ou modifiée ?).');
+        vscode.window.showInformationMessage(t('Ligne introuvable (supprimée ou modifiée ?).', 'Row not found (deleted or modified?).'));
         return;
       }
       const buf = Buffer.from(hex, 'hex');
       const img = sniffImage(buf);
       if (img) {
-        showImage(`${src.table}.${name} (${img.label}, ${Math.max(1, Math.round(buf.length / 1024))} Ko)`, img.mime, buf);
+        showImage(
+          `${src.table}.${name} (${img.label}, ${Math.max(1, Math.round(buf.length / 1024))} ${t('Ko', 'KB')})`,
+          img.mime,
+          buf,
+        );
       } else {
         const doc = await vscode.workspace.openTextDocument({
           language: 'plaintext',
-          content: `${src.table}.${name} : ${buf.length} octets\n\n` + hexDump(buf),
+          content: t(`${src.table}.${name} : ${buf.length} octets\n\n`, `${src.table}.${name}: ${buf.length} bytes\n\n`) + hexDump(buf),
         });
         await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`Lecture de la valeur impossible : ${errorMessage(err)}`);
+      vscode.window.showErrorMessage(t(`Lecture de la valeur impossible : ${errorMessage(err)}`, `Could not read the value: ${errorMessage(err)}`));
     }
   }
 
@@ -2037,22 +2073,33 @@ export class ResultsPanel {
       .filter((i): i is number => typeof i === 'number' && Number.isInteger(i) && !!last.rows[i])
       .map((i) => last.rows[i] as Row);
     if (rows.length === 0) {
-      vscode.window.showInformationMessage('Aucune ligne à copier.');
+      vscode.window.showInformationMessage(t('Aucune ligne à copier.', 'No rows to copy.'));
       return;
     }
     const b = last.browse;
     const dbType = b ? b.src.dbType : last.spec?.dbType ?? last.dbType;
     const formats: { label: string; description: string; format: ExportFormat }[] = [
-      { label: 'Tableur (TSV)', description: 'avec en-tête ; à coller dans Excel, LibreOffice, Sheets', format: 'tsv' },
-      { label: 'Markdown', description: 'tableau pour une documentation ou un ticket', format: 'md' },
-      { label: 'JSON', description: "tableau d'objets", format: 'json' },
-      { label: 'CSV', description: 'avec en-tête', format: 'csv' },
+      {
+        label: t('Tableur (TSV)', 'Spreadsheet (TSV)'),
+        description: t('avec en-tête ; à coller dans Excel, LibreOffice, Sheets', 'with header; paste into Excel, LibreOffice, Sheets'),
+        format: 'tsv',
+      },
+      {
+        label: 'Markdown',
+        description: t('tableau pour une documentation ou un ticket', 'table for documentation or a ticket'),
+        format: 'md',
+      },
+      { label: 'JSON', description: t("tableau d'objets", 'array of objects'), format: 'json' },
+      { label: 'CSV', description: t('avec en-tête', 'with header'), format: 'csv' },
     ];
     if (dbType) {
-      formats.push({ label: 'INSERT SQL', description: 'instructions INSERT', format: 'sql' });
+      formats.push({ label: 'INSERT SQL', description: t('instructions INSERT', 'INSERT statements'), format: 'sql' });
     }
     const picked = await vscode.window.showQuickPick(formats, {
-      placeHolder: `Copier ${plural(rows.length, 'ligne', 'lignes')} au format…`,
+      placeHolder: t(
+        `Copier ${plural(rows.length, 'ligne', 'lignes')} au format…`,
+        `Copy ${plural(rows.length, 'row', 'rows')} as…`,
+      ),
     });
     if (!picked) {
       return;
@@ -2064,9 +2111,9 @@ export class ResultsPanel {
         table = dbType === 'sqlite' ? quoteIdent(dbType, src.table) : `${quoteIdent(dbType, src.container)}.${quoteIdent(dbType, src.table)}`;
       } else {
         const name = await vscode.window.showInputBox({
-          prompt: 'Nom de la table dans les instructions INSERT',
-          value: 'resultat',
-          validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+          prompt: t('Nom de la table dans les instructions INSERT', 'Table name in the INSERT statements'),
+          value: t('resultat', 'result'),
+          validateInput: (v) => (v.trim() ? undefined : t('Nom obligatoire', 'Name required')),
         });
         if (!name) {
           return;
@@ -2078,8 +2125,17 @@ export class ResultsPanel {
     const columns = last.columns.map((name) => ({ name, type: tableColumns?.find((c) => c.name === name)?.type }));
     const { text, lost } = await formatRows({ format: picked.format, columns, dbType, table }, rows);
     await vscode.env.clipboard.writeText(picked.format === 'json' || picked.format === 'sql' ? text.trimEnd() : text.replace(/\n$/, ''));
-    const extra = lost > 0 ? ` (${plural(lost, 'valeur binaire tronquée remplacée', 'valeurs binaires tronquées remplacées')} par NULL)` : '';
-    vscode.window.setStatusBarMessage(`${plural(rows.length, 'ligne copiée', 'lignes copiées')} (${picked.label})${extra}`, 4000);
+    const extra =
+      lost > 0
+        ? t(
+            ` (${plural(lost, 'valeur binaire tronquée remplacée', 'valeurs binaires tronquées remplacées')} par NULL)`,
+            ` (${plural(lost, 'truncated binary value replaced', 'truncated binary values replaced')} with NULL)`,
+          )
+        : '';
+    vscode.window.setStatusBarMessage(
+      `${plural(rows.length, t('ligne copiée', 'row copied'), t('lignes copiées', 'rows copied'))} (${picked.label})${extra}`,
+      4000,
+    );
   }
 
   /** Exporte le résultat affiché (ou toute la table pour un aperçu) en CSV, JSON ou INSERT SQL. */
@@ -2092,13 +2148,13 @@ export class ResultsPanel {
     const dbType = b ? b.src.dbType : last.dbType;
 
     const formats: { label: string; description: string; format: ExportFormat }[] = [
-      { label: 'CSV', description: 'tableur (Excel, LibreOffice…)', format: 'csv' },
-      { label: 'JSON', description: 'tableau d\'objets, un par ligne', format: 'json' },
+      { label: 'CSV', description: t('tableur (Excel, LibreOffice…)', 'spreadsheet (Excel, LibreOffice…)'), format: 'csv' },
+      { label: 'JSON', description: t("tableau d'objets, un par ligne", 'array of objects, one per row'), format: 'json' },
     ];
     if (dbType) {
-      formats.push({ label: 'INSERT SQL', description: 'instructions INSERT rejouables', format: 'sql' });
+      formats.push({ label: 'INSERT SQL', description: t('instructions INSERT rejouables', 'replayable INSERT statements'), format: 'sql' });
     }
-    const pickedFormat = await vscode.window.showQuickPick(formats, { placeHolder: 'Format d\'export' });
+    const pickedFormat = await vscode.window.showQuickPick(formats, { placeHolder: t("Format d'export", 'Export format') });
     if (!pickedFormat) {
       return;
     }
@@ -2107,19 +2163,29 @@ export class ResultsPanel {
     let whole = false;
     if (b) {
       const shown = last.rows.filter((r) => r !== null).length;
-      const active = [b.filter ? `filtre « ${b.filter} »` : '', b.where ? 'filtre de navigation' : '', b.sort ? 'tri en cours' : '']
+      const active = [
+        b.filter ? t(`filtre « ${b.filter} »`, `filter “${b.filter}”`) : '',
+        b.where ? t('filtre de navigation', 'navigation filter') : '',
+        b.sort ? t('tri en cours', 'sort applied') : '',
+      ]
         .filter(Boolean)
         .join(', ');
       const scope = await vscode.window.showQuickPick(
         [
-          { label: 'Page affichée', description: `${shown} ligne(s), modifications comprises`, whole: false },
           {
-            label: 'Toute la table',
-            description: active ? `lue sur le serveur — ${active}` : 'lue sur le serveur par lots',
+            label: t('Page affichée', 'Displayed page'),
+            description: t(`${shown} ligne(s), modifications comprises`, `${shown} row(s), including edits`),
+            whole: false,
+          },
+          {
+            label: t('Toute la table', 'Whole table'),
+            description: active
+              ? t(`lue sur le serveur — ${active}`, `read from the server — ${active}`)
+              : t('lue sur le serveur par lots', 'read from the server in batches'),
             whole: true,
           },
         ],
-        { placeHolder: 'Que faut-il exporter ?' },
+        { placeHolder: t('Que faut-il exporter ?', 'What should be exported?') },
       );
       if (!scope) {
         return;
@@ -2136,9 +2202,9 @@ export class ResultsPanel {
         }
       } else {
         const name = await vscode.window.showInputBox({
-          prompt: 'Nom de la table dans les instructions INSERT',
-          value: 'resultat',
-          validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+          prompt: t('Nom de la table dans les instructions INSERT', 'Table name in the INSERT statements'),
+          value: t('resultat', 'result'),
+          validateInput: (v) => (v.trim() ? undefined : t('Nom obligatoire', 'Name required')),
         });
         if (!name) {
           return;
@@ -2147,10 +2213,10 @@ export class ResultsPanel {
       }
     }
 
-    const defaultName = `${b ? b.src.table : 'resultat'}.${EXTENSIONS[format]}`;
+    const defaultName = `${b ? b.src.table : t('resultat', 'result')}.${EXTENSIONS[format]}`;
     const uri = await vscode.window.showSaveDialog({
       filters: { [pickedFormat.label]: [EXTENSIONS[format]] },
-      saveLabel: 'Exporter',
+      saveLabel: t('Exporter', 'Export'),
       defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir(), defaultName)),
     });
     if (!uri) {
@@ -2179,7 +2245,7 @@ export class ResultsPanel {
       }
       await this.exportWholeTable(b, options, uri);
     } catch (err) {
-      vscode.window.showErrorMessage(`Export impossible : ${errorMessage(err)}`);
+      vscode.window.showErrorMessage(t(`Export impossible : ${errorMessage(err)}`, `Export failed: ${errorMessage(err)}`));
     }
   }
 
@@ -2215,7 +2281,7 @@ export class ResultsPanel {
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: `Export de ${src.table}`,
+          title: t(`Export de ${src.table}`, `Exporting ${src.table}`),
           cancellable: true,
         },
         async (progress, cancel) => {
@@ -2238,7 +2304,7 @@ export class ResultsPanel {
             onBatch: (rows) => formatter.rows(rows),
             onProgress: (done, total) => {
               progress.report({
-                message: total ? `${done} / ${total} lignes` : `${done} lignes`,
+                message: total ? t(`${done} / ${total} lignes`, `${done} / ${total} rows`) : t(`${done} lignes`, `${done} rows`),
                 increment: total ? ((done - reported) / total) * 100 : undefined,
               });
               reported = done;
@@ -2268,16 +2334,22 @@ export class ResultsPanel {
       if (stream) {
         fs.rmSync(uri.fsPath, { force: true });
       }
-      vscode.window.showInformationMessage('Export annulé : le fichier partiel a été supprimé.');
+      vscode.window.showInformationMessage(t('Export annulé : le fichier partiel a été supprimé.', 'Export cancelled: the partial file was deleted.'));
       return;
     }
     this.exported(uri.fsPath, written, formatter.lost.n);
   }
 
   private exported(file: string, rows: number, lost: number): void {
-    let msg = `Export enregistré : ${file} (${plural(rows, 'ligne', 'lignes')})`;
+    let msg = t(
+      `Export enregistré : ${file} (${plural(rows, 'ligne', 'lignes')})`,
+      `Export saved: ${file} (${plural(rows, 'row', 'rows')})`,
+    );
     if (lost > 0) {
-      msg += ` — ${plural(lost, 'valeur binaire trop longue a été remplacée', 'valeurs binaires trop longues ont été remplacées')} par NULL.`;
+      msg += t(
+        ` — ${plural(lost, 'valeur binaire trop longue a été remplacée', 'valeurs binaires trop longues ont été remplacées')} par NULL.`,
+        ` — ${plural(lost, 'oversized binary value was replaced', 'oversized binary values were replaced')} with NULL.`,
+      );
     }
     void vscode.window.showInformationMessage(msg);
   }
@@ -2304,12 +2376,12 @@ function buildHtml(payload: Payload, nonce: string): string {
   // Le JSON est placé dans une balise <script type="application/json"> : on neutralise "<".
   const data = JSON.stringify(payload).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="${isFrench() ? 'fr' : 'en'}">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Résultats SQL</title>
+<title>${t('Résultats SQL', 'SQL Results')}</title>
 <style nonce="${nonce}">${CSS}</style>
 </head>
 <body>

@@ -1,4 +1,5 @@
 import { DbType } from './types';
+import { t } from './i18n';
 
 /** Une instruction SQL : texte d'origine, et copie « masquée » (chaînes et commentaires neutralisés) pour l'analyse. */
 export interface Statement {
@@ -207,14 +208,14 @@ export function classify(st: Statement): StatementInfo {
     if ((dml === 'UPDATE' || dml === 'DELETE') && !has('WHERE')) {
       danger =
         dml === 'UPDATE'
-          ? 'UPDATE sans WHERE : toutes les lignes de la table seront modifiées.'
-          : 'DELETE sans WHERE : toutes les lignes de la table seront supprimées.';
+          ? t('UPDATE sans WHERE : toutes les lignes de la table seront modifiées.', 'UPDATE without WHERE: every row in the table will be modified.')
+          : t('DELETE sans WHERE : toutes les lignes de la table seront supprimées.', 'DELETE without WHERE: every row in the table will be deleted.');
     } else if (first === 'DROP') {
-      danger = 'DROP : suppression définitive d\'un objet et de ses données.';
+      danger = t('DROP : suppression définitive d\'un objet et de ses données.', 'DROP: permanently removes an object and its data.');
     } else if (first === 'TRUNCATE') {
-      danger = 'TRUNCATE : toutes les lignes seront supprimées, sans retour possible.';
+      danger = t('TRUNCATE : toutes les lignes seront supprimées, sans retour possible.', 'TRUNCATE: every row will be deleted, with no way back.');
     } else if (first === 'ALTER' && has('DROP')) {
-      danger = 'ALTER … DROP : suppression définitive d\'une colonne ou d\'une contrainte.';
+      danger = t('ALTER … DROP : suppression définitive d\'une colonne ou d\'une contrainte.', 'ALTER … DROP: permanently removes a column or a constraint.');
     }
   }
   return { sql: st.sql, kind, danger, ddl: DDL_FIRST.has(first) };
@@ -253,7 +254,7 @@ export function assessRun(sql: string, dbType: DbType, o: GuardOptions): Assessm
   if (o.readOnly && writes.length > 0) {
     return {
       statements,
-      blocked: `Connexion en lecture seule : « ${short(writes[0].sql)} » est une instruction d'écriture, rien n'a été exécuté.`,
+      blocked: t(`Connexion en lecture seule : « ${short(writes[0].sql)} » est une instruction d'écriture, rien n'a été exécuté.`, `Read-only connection: “${short(writes[0].sql)}” is a write statement, nothing was executed.`),
     };
   }
 
@@ -267,16 +268,16 @@ export function assessRun(sql: string, dbType: DbType, o: GuardOptions): Assessm
   if (prod && dangers.length === 0) {
     lines.push(...writes.slice(0, 5).map((s) => `• ${short(s.sql)}`));
     if (writes.length > 5) {
-      lines.push(`• … et ${writes.length - 5} autre(s) instruction(s) d'écriture`);
+      lines.push(t(`• … et ${writes.length - 5} autre(s) instruction(s) d'écriture`, `• … and ${writes.length - 5} more write statement(s)`));
     }
   }
   return {
     statements,
     confirm: {
       message: prod
-        ? '⚠ BASE DE PRODUCTION : exécuter cette requête ?'
-        : 'Cette requête est potentiellement destructrice. L\'exécuter ?',
-      detail: lines.join('\n') + (prod && dangers.length > 0 ? '\n\nConnexion de production.' : ''),
+        ? t('⚠ BASE DE PRODUCTION : exécuter cette requête ?', '⚠ PRODUCTION DATABASE: run this query?')
+        : t('Cette requête est potentiellement destructrice. L\'exécuter ?', 'This query is potentially destructive. Run it?'),
+      detail: lines.join('\n') + (prod && dangers.length > 0 ? t('\n\nConnexion de production.', '\n\nProduction connection.') : ''),
     },
   };
 }
