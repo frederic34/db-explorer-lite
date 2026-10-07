@@ -1,7 +1,7 @@
 {
   "name": "db-explorer-lite",
-  "displayName": "DB Explorer Lite",
-  "description": "Se connecter à MySQL/MariaDB, PostgreSQL ou SQLite, parcourir les tables, consulter et exporter les données, exécuter des requêtes SQL, afficher la structure et le diagramme des relations.",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
   "version": "0.9.0",
   "publisher": "local",
   "license": "MIT",
@@ -35,7 +35,7 @@
       "activitybar": [
         {
           "id": "dbExplorer",
-          "title": "DB Explorer",
+          "title": "%viewsContainers.activitybar.0.title%",
           "icon": "resources/database.svg"
         }
       ]
@@ -44,11 +44,11 @@
       "dbExplorer": [
         {
           "id": "dbExplorer.connections",
-          "name": "Connexions"
+          "name": "%views.dbExplorer.0.name%"
         },
         {
           "id": "dbExplorer.saved",
-          "name": "Requêtes enregistrées"
+          "name": "%views.dbExplorer.1.name%"
         }
       ]
     },
@@ -65,178 +65,178 @@
     "commands": [
       {
         "command": "dbExplorer.addConnection",
-        "title": "Ajouter une connexion",
+        "title": "%commands.0.title%",
         "category": "DB Explorer",
         "icon": "$(add)"
       },
       {
         "command": "dbExplorer.editConnection",
-        "title": "Modifier la connexion",
+        "title": "%commands.1.title%",
         "category": "DB Explorer",
         "icon": "$(edit)"
       },
       {
         "command": "dbExplorer.removeConnection",
-        "title": "Supprimer la connexion",
+        "title": "%commands.2.title%",
         "category": "DB Explorer",
         "icon": "$(trash)"
       },
       {
         "command": "dbExplorer.refresh",
-        "title": "Actualiser",
+        "title": "%commands.3.title%",
         "category": "DB Explorer",
         "icon": "$(refresh)"
       },
       {
         "command": "dbExplorer.newQuery",
-        "title": "Nouvelle requête SQL",
+        "title": "%commands.4.title%",
         "category": "DB Explorer",
         "icon": "$(new-file)"
       },
       {
         "command": "dbExplorer.runQuery",
-        "title": "Exécuter la requête",
+        "title": "%commands.5.title%",
         "category": "DB Explorer",
         "icon": "$(play)"
       },
       {
         "command": "dbExplorer.previewTable",
-        "title": "Afficher les données",
+        "title": "%commands.6.title%",
         "category": "DB Explorer",
         "icon": "$(open-preview)"
       },
       {
         "command": "dbExplorer.showStructure",
-        "title": "Afficher la structure (index, contraintes, DDL)",
+        "title": "%commands.7.title%",
         "category": "DB Explorer",
         "icon": "$(symbol-structure)"
       },
       {
         "command": "dbExplorer.showDiagram",
-        "title": "Diagramme des relations",
+        "title": "%commands.8.title%",
         "category": "DB Explorer",
         "icon": "$(type-hierarchy)"
       },
       {
         "command": "dbExplorer.setGroup",
-        "title": "Ranger dans un groupe…",
+        "title": "%commands.9.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.renameGroup",
-        "title": "Renommer le groupe",
+        "title": "%commands.10.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.removeGroup",
-        "title": "Supprimer le groupe",
+        "title": "%commands.11.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.exportConnections",
-        "title": "Exporter les connexions (sans mots de passe)",
+        "title": "%commands.12.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.importConnections",
-        "title": "Importer des connexions (JSON, .pgpass, .my.cnf, pg_service)",
+        "title": "%commands.13.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.selectConnection",
-        "title": "Choisir la connexion de cet éditeur",
+        "title": "%commands.14.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.copyName",
-        "title": "Copier le nom",
+        "title": "%commands.15.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.history",
-        "title": "Historique des requêtes",
+        "title": "%commands.16.title%",
         "category": "DB Explorer",
         "icon": "$(history)"
       },
       {
         "command": "dbExplorer.clearHistory",
-        "title": "Effacer l'historique des requêtes",
+        "title": "%commands.17.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.cancelQuery",
-        "title": "Annuler la requête en cours",
+        "title": "%commands.18.title%",
         "category": "DB Explorer",
         "icon": "$(debug-stop)"
       },
       {
         "command": "dbExplorer.forgetSshHosts",
-        "title": "Oublier les serveurs SSH approuvés",
+        "title": "%commands.19.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.runStatement",
-        "title": "Exécuter l'instruction sous le curseur",
+        "title": "%commands.20.title%",
         "category": "DB Explorer",
         "icon": "$(debug-start)"
       },
       {
         "command": "dbExplorer.explain",
-        "title": "Expliquer l'instruction (EXPLAIN)",
+        "title": "%commands.21.title%",
         "category": "DB Explorer",
         "icon": "$(graph)"
       },
       {
         "command": "dbExplorer.explainAnalyze",
-        "title": "Expliquer avec mesure (EXPLAIN ANALYZE)",
+        "title": "%commands.22.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.saveQuery",
-        "title": "Enregistrer la requête",
+        "title": "%commands.23.title%",
         "category": "DB Explorer",
         "icon": "$(save)"
       },
       {
         "command": "dbExplorer.openSaved",
-        "title": "Ouvrir la requête enregistrée",
+        "title": "%commands.24.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.runSaved",
-        "title": "Exécuter la requête enregistrée",
+        "title": "%commands.25.title%",
         "category": "DB Explorer",
         "icon": "$(play)"
       },
       {
         "command": "dbExplorer.renameSaved",
-        "title": "Renommer la requête",
+        "title": "%commands.26.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.moveSaved",
-        "title": "Déplacer dans un dossier…",
+        "title": "%commands.27.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.deleteSaved",
-        "title": "Supprimer la requête",
+        "title": "%commands.28.title%",
         "category": "DB Explorer",
         "icon": "$(trash)"
       },
       {
         "command": "dbExplorer.renameSavedFolder",
-        "title": "Renommer le dossier",
+        "title": "%commands.29.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.deleteSavedFolder",
-        "title": "Supprimer le dossier",
+        "title": "%commands.30.title%",
         "category": "DB Explorer"
       },
       {
         "command": "dbExplorer.compareSchemas",
-        "title": "Comparer avec une autre base / un autre schéma…",
+        "title": "%commands.31.title%",
         "category": "DB Explorer",
         "icon": "$(diff)"
       }
@@ -542,24 +542,24 @@
       }
     ],
     "configuration": {
-      "title": "DB Explorer Lite",
+      "title": "%configuration.title%",
       "properties": {
         "dbExplorer.previewLimit": {
           "type": "number",
           "default": 200,
           "minimum": 1,
-          "description": "Lignes par page au départ dans l'aperçu d'une table (modifiable dans l'aperçu, 1 à 1000)."
+          "description": "%configuration.properties.dbExplorer.previewLimit.description%"
         },
         "dbExplorer.maxRows": {
           "type": "number",
           "default": 5000,
           "minimum": 1,
-          "description": "Nombre maximum de lignes conservées et affichées pour un résultat de requête (le reste est ignoré)."
+          "description": "%configuration.properties.dbExplorer.maxRows.description%"
         },
         "dbExplorer.showSystemSchemas": {
           "type": "boolean",
           "default": false,
-          "description": "Afficher les bases / schémas système (information_schema, mysql, pg_catalog…)."
+          "description": "%configuration.properties.dbExplorer.showSystemSchemas.description%"
         },
         "dbExplorer.csvSeparator": {
           "type": "string",
@@ -569,22 +569,22 @@
             "tab"
           ],
           "default": ",",
-          "description": "Séparateur utilisé pour l'export CSV (« ; » est souvent préférable pour Excel en français)."
+          "description": "%configuration.properties.dbExplorer.csvSeparator.description%"
         },
         "dbExplorer.confirmDangerous": {
           "type": "boolean",
           "default": true,
-          "description": "Demander confirmation avant d'exécuter UPDATE / DELETE sans WHERE, DROP, TRUNCATE ou ALTER … DROP."
+          "description": "%configuration.properties.dbExplorer.confirmDangerous.description%"
         },
         "dbExplorer.confirmOnProduction": {
           "type": "boolean",
           "default": true,
-          "description": "Sur une connexion marquée « production », demander confirmation avant toute écriture (éditeur SQL et grille)."
+          "description": "%configuration.properties.dbExplorer.confirmOnProduction.description%"
         },
         "dbExplorer.promptParameters": {
           "type": "boolean",
           "default": true,
-          "description": "Demander la valeur des paramètres nommés (:nom) avant d'exécuter une requête. Les « :: » de PostgreSQL, les chaînes et les commentaires sont ignorés."
+          "description": "%configuration.properties.dbExplorer.promptParameters.description%"
         }
       }
     }

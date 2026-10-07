@@ -45,7 +45,7 @@ module.exports = {
     showTextDocument: async (d) => { global.__shown = d; return {}; },
     setStatusBarMessage(m) { global.__status = (global.__status || []).concat([m]); },
   },
-  env: { clipboard: { writeText: async (t) => { global.__clip = t; } }, openExternal: async (u) => { global.__opened = (global.__opened || []).concat([u.toString()]); return true; } },
+  env: { language: 'fr', clipboard: { writeText: async (t) => { global.__clip = t; } }, openExternal: async (u) => { global.__opened = (global.__opened || []).concat([u.toString()]); return true; } },
   ProgressLocation: { Notification: 15, Window: 10 },
   workspace: { openTextDocument: async (o) => { global.__docs = (global.__docs || []).concat([o]); return o; }, getConfiguration: () => ({ get: (_k, d) => d }), fs: { writeFile: async (u, c) => { global.__written = { u, c }; } } },
 };

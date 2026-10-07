@@ -1,3 +1,4 @@
+import { t, webviewI18n } from './i18n';
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { CHAR_W, ErEdge, ErLayout, ErTable, HEAD_H, PAD, ROW_H } from './erLayout';
@@ -318,7 +319,7 @@ export function buildDiagramHtml(payload: DiagramPayload, nonce: string): string
 <body>
 <div id="root"></div>
 <script id="data" type="application/json" nonce="${nonce}">${data}</script>
-<script nonce="${nonce}">${SCRIPT}</script>
+<script nonce="${nonce}">${webviewI18n()}${SCRIPT}</script>
 </body>
 </html>`;
 }

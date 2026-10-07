@@ -1,3 +1,4 @@
+import { t, webviewI18n } from './i18n';
 import { randomBytes, randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
@@ -679,7 +680,7 @@ function buildHtml(init: InitData, nonce: string): string {
   </form>
 </main>
 <script id="init" type="application/json" nonce="${nonce}">${data}</script>
-<script nonce="${nonce}">${SCRIPT}</script>
+<script nonce="${nonce}">${webviewI18n()}${SCRIPT}</script>
 </body>
 </html>`;
 }
