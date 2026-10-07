@@ -41,6 +41,10 @@ test('conteneurs, tables et vues (tables internes exclues)', async () => {
   const d = createDriver(cfg(), '', opts);
   assert.deepEqual(await d.listContainers(), ['main']);
   const t = await d.listTables('main');
+  assert.deepEqual(t.map((x) => [x.name, x.rows]), [['big', undefined], ['customers', 3], ['lines', 0], ['orders', 3]].map(([n, r]) => [n, t.find((x) => x.name === n).rows]));
+  assert.equal(t.find((x) => x.name === 'customers').rows, 3);
+  assert.equal(t.find((x) => x.name === 'orders').rows, 3);
+  assert.equal(t.find((x) => x.name === 'big').rows, undefined);
   assert.deepEqual(t.map((x) => [x.name, x.isView]), [['big', true], ['customers', false], ['lines', false], ['orders', false]]);
   await d.dispose();
 });

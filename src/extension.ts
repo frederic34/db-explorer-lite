@@ -1056,7 +1056,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => docConnections.delete(doc.uri.toString())),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('dbExplorer.showSystemSchemas')) {
+      if (e.affectsConfiguration('dbExplorer.showSystemSchemas') || e.affectsConfiguration('dbExplorer.showRowCounts')) {
         tree.refresh();
       }
     }),

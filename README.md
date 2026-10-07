@@ -7,6 +7,7 @@ Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fich
 ## Fonctionnalités
 
 - **Vue « DB Explorer »** dans la barre d'activité : connexions → bases (MySQL) ou schémas (PostgreSQL) → tables et vues → colonnes (type, clé primaire, NOT NULL).
+- **Nombre de lignes** à côté de chaque table (estimation `~` du serveur pour MySQL/MariaDB et PostgreSQL, exact pour SQLite ; réglage `dbExplorer.showRowCounts`).
 - **Aperçu des données** : icône « œil » au survol d'une table (ou clic droit → *Afficher les données*). Les données sont **paginées** ; le **tri** et le **filtre** portent sur toute la table, pas seulement sur la page affichée (voir [Parcourir une table](#parcourir-une-table)).
 - **Navigation par clés étrangères** : cliquez sur une valeur de clé étrangère pour ouvrir la ligne référencée ; voir [Naviguer par les clés étrangères](#naviguer-par-les-clés-étrangères).
 - **Sens inverse** : le lien ↩ sur une valeur de clé primaire liste les tables qui la référencent, avec le nombre de lignes ; voir [Naviguer par les clés étrangères](#naviguer-par-les-clés-étrangères).

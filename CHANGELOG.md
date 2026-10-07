@@ -2,6 +2,11 @@
 
 Toutes les évolutions notables de DB Explorer Lite. Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions selon [SemVer](https://semver.org/lang/fr/).
 
+## [0.11.0] — 2026-10-07
+
+### Ajouté
+- **Nombre de lignes dans l'arbre** à côté de chaque table : estimation du serveur pour MySQL/MariaDB et PostgreSQL (préfixe `~`, d'après `TABLE_ROWS` / `reltuples`, inconnue tant que la table n'a pas été analysée), comptage exact pour SQLite. Réglage `dbExplorer.showRowCounts` pour le masquer.
+
 ## [0.10.0] — 2026-10-07
 
 ### Ajouté

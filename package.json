@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "publisher": "local",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -560,6 +560,11 @@
           "type": "boolean",
           "default": false,
           "description": "%configuration.properties.dbExplorer.showSystemSchemas.description%"
+        },
+        "dbExplorer.showRowCounts": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.properties.dbExplorer.showRowCounts.description%"
         },
         "dbExplorer.csvSeparator": {
           "type": "string",

@@ -151,6 +151,11 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
       fk: c.references && c.references.container === 'shop' ? { table: c.references.table, column: c.references.column } : undefined })) });
   }
   const erEdges = buildEdges(erTables);
+  await db(KIND === 'pg' ? 'ANALYZE shop.produits' : 'ANALYZE TABLE shop.produits');
+  const tl = await driver.listTables('shop');
+  const tp = tl.find((x) => x.name === 'produits');
+  assert.ok(tp.approx && tp.rows > 0, 'estimation du nombre de lignes (produits)');
+  ok('liste des tables : nombre de lignes estimé', `produits ≈ ${tp.rows}`);
   const refs = await driver.listReferrers('shop', 'produits');
   assert.ok(refs.some((r) => r.table === 'enfants' && r.column === 'produit_id' && r.refColumn === 'id'), 'listReferrers : enfants → produits');
   assert.equal((await driver.listReferrers('shop', 'enfants')).length, 0, 'enfants non référencée');

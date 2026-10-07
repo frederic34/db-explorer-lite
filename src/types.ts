@@ -36,6 +36,10 @@ export interface ConnectionConfig {
 export interface TableInfo {
   name: string;
   isView: boolean;
+  /** Nombre de lignes : estimation du catalogue (MySQL, PostgreSQL) ou comptage exact (SQLite) ; absent pour une vue ou si inconnu. */
+  rows?: number;
+  /** Vrai quand `rows` est une estimation. */
+  approx?: boolean;
 }
 
 export interface ColumnInfo {

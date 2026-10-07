@@ -62,6 +62,13 @@ export class TableNode extends vscode.TreeItem {
     this.contextValue = table.isView ? 'view' : 'table';
     this.iconPath = new vscode.ThemeIcon(table.isView ? 'eye' : 'table');
     this.description = table.isView ? tr('vue', 'view') : undefined;
+    if (!table.isView && table.rows !== undefined && vscode.workspace.getConfiguration('dbExplorer').get<boolean>('showRowCounts', true)) {
+      const n = table.rows.toLocaleString(tr('fr-FR', 'en-US'));
+      this.description = (table.approx ? '~' : '') + n;
+      this.tooltip = table.approx
+        ? tr(`${table.name} — environ ${n} lignes (estimation du serveur)`, `${table.name} — about ${n} rows (server estimate)`)
+        : tr(`${table.name} — ${n} lignes`, `${table.name} — ${n} rows`);
+    }
   }
 }
 

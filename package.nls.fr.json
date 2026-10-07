@@ -43,5 +43,6 @@
   "configuration.properties.dbExplorer.confirmOnProduction.description": "Sur une connexion marquée « production », demander confirmation avant toute écriture (éditeur SQL et grille).",
   "configuration.properties.dbExplorer.promptParameters.description": "Demander la valeur des paramètres nommés (:nom) avant d'exécuter une requête. Les « :: » de PostgreSQL, les chaînes et les commentaires sont ignorés.",
   "extension.displayName": "DB Explorer Lite",
-  "extension.description": "Se connecter à MySQL/MariaDB, PostgreSQL ou SQLite, parcourir les tables, consulter et exporter les données, exécuter des requêtes SQL, afficher la structure et le diagramme des relations."
+  "extension.description": "Se connecter à MySQL/MariaDB, PostgreSQL ou SQLite, parcourir les tables, consulter et exporter les données, exécuter des requêtes SQL, afficher la structure et le diagramme des relations.",
+  "configuration.properties.dbExplorer.showRowCounts.description": "Afficher le nombre de lignes à côté de chaque table (estimation du serveur pour MySQL/MariaDB et PostgreSQL, comptage exact pour SQLite)."
 }

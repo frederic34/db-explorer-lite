@@ -142,13 +142,14 @@ export class MySqlDriver implements DbDriver {
 
   async listTables(container: string): Promise<TableInfo[]> {
     const { rows } = await this.run(
-      'SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
+      'SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME',
       [container],
     );
-    return (rows as unknown[][]).map((r) => ({
-      name: String(r[0]),
-      isView: String(r[1]).includes('VIEW'),
-    }));
+    return (rows as unknown[][]).map((r) => {
+      const isView = String(r[1]).includes('VIEW');
+      const n = r[2] === null || r[2] === undefined ? NaN : Number(r[2]);
+      return { name: String(r[0]), isView, ...(isView || !Number.isFinite(n) ? {} : { rows: n, approx: true }) };
+    });
   }
 
   async describeTable(container: string, table: string): Promise<TableStructure> {
@@ -514,14 +515,16 @@ export class PostgresDriver implements DbDriver {
 
   async listTables(container: string): Promise<TableInfo[]> {
     const rows = await this.rows(
-      'SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+      'SELECT c.relname, c.relkind, c.reltuples::bigint FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace ' +
         "WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f') ORDER BY c.relname",
       [container],
     );
-    return rows.map((r) => ({
-      name: String(r[0]),
-      isView: r[1] === 'v' || r[1] === 'm',
-    }));
+    return rows.map((r) => {
+      const isView = r[1] === 'v' || r[1] === 'm';
+      const n = Number(r[2]);
+      // reltuples vaut -1 tant que la table n'a jamais été analysée : inconnu
+      return { name: String(r[0]), isView, ...(isView || !Number.isFinite(n) || n < 0 ? {} : { rows: n, approx: true }) };
+    });
   }
 
   async describeTable(container: string, table: string): Promise<TableStructure> {
@@ -911,7 +914,20 @@ export class SqliteDriver implements DbDriver {
     const rows = await this.rows(
       "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite!_%' ESCAPE '!' ORDER BY name",
     );
-    return rows.map((r) => ({ name: String(r[0]), isView: r[1] === 'view' }));
+    const list: TableInfo[] = rows.map((r) => ({ name: String(r[0]), isView: r[1] === 'view' }));
+    // Fichier chargé en mémoire : un comptage exact par table reste rapide (plafonné pour les très gros schémas).
+    const counted = list.filter((x) => !x.isView).slice(0, 300);
+    await Promise.all(
+      counted.map(async (x) => {
+        try {
+          const c = await this.rows('SELECT count(*) FROM "' + x.name.replace(/"/g, '""') + '"');
+          x.rows = Number(c[0][0]);
+        } catch {
+          /* table illisible : pas de compte */
+        }
+      }),
+    );
+    return list;
   }
 
   async listReferrers(_container: string, table: string): Promise<Referrer[]> {
