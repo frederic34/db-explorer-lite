@@ -182,7 +182,7 @@ npm run test:integration            # télécharge VS Code (réseau requis) puis
 xvfb-run -a npm run test:integration  # Linux sans écran
 ```
 
-`test/integration/` vérifie l'activation, l'enregistrement de toutes les commandes déclarées, l'arbre, une base SQLite (worker + WebAssembly sous le Node d'Electron), l'instruction sous le curseur et l'EXPLAIN. Le contenu des webviews n'est pas inspectable depuis l'hôte : il reste couvert par les tests jsdom. Dans la CI, ce job est **non bloquant** (`continue-on-error`) le temps de faire ses preuves.
+`test/integration/` vérifie l'activation, l'enregistrement de toutes les commandes déclarées, l'arbre, une base SQLite (worker + WebAssembly sous le Node d'Electron), l'instruction sous le curseur et l'EXPLAIN. Le contenu des webviews n'est pas inspectable depuis l'hôte : il reste couvert par les tests jsdom. Dans la CI, ce job est **bloquant** : une release n'est construite que s'il passe.
 
 ### Publier une version
 
