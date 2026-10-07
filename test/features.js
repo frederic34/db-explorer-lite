@@ -10,6 +10,8 @@ const { formatRows, streamTable } = require('../.test-build/exporter.js');
 const { buildPageQuery, buildCountQuery, parseFilter, keysetColumns } = require('../.test-build/browse.js');
 const { explainSql, planToResult } = require('../.test-build/explain.js');
 const { substituteParams } = require('../.test-build/queryParams.js');
+const { diffSchemas, takeSnapshot } = require('../.test-build/schemaDiff.js');
+const { splitStatements } = require('../.test-build/sqlGuard.js');
 const { buildEdges, layoutEr, toMermaid } = require('../.test-build/erLayout.js');
 
 const KIND = process.argv[2];
@@ -365,6 +367,59 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
   }
   assert.equal(Number((await db(`SELECT COUNT(*) FROM ${T('shop', 'kk')}`)).rows[0][0]) > 0, true);
   ok('valeurs hostiles réinjectées en littéraux, relues à l\'identique');
+
+  // ------------------------------------------------------------ comparaison de schémas
+  console.log('Comparaison de schémas');
+  {
+    const pg = KIND === 'pg';
+    const mk = pg ? (n) => `CREATE SCHEMA ${q(n)}` : (n) => `CREATE DATABASE ${q(n)} CHARACTER SET utf8mb4`;
+    for (const n of ['cmp_a', 'cmp_b']) { await db(pg ? `DROP SCHEMA IF EXISTS ${q(n)} CASCADE` : `DROP DATABASE IF EXISTS ${q(n)}`); await db(mk(n)); }
+    const A = [], B = [];
+    if (pg) {
+      A.push('CREATE TABLE cmp_a.t_parent (id serial PRIMARY KEY, nom varchar(100) NOT NULL, ville text, prix numeric(10,2) DEFAULT 0)',
+        'CREATE TABLE cmp_a.t_child (id serial PRIMARY KEY, parent_id int REFERENCES cmp_a.t_parent(id), label text, CONSTRAINT t_child_label_key UNIQUE (label))',
+        'CREATE INDEX idx_child_parent ON cmp_a.t_child (parent_id)',
+        'CREATE TABLE cmp_a.t_only_a (id int PRIMARY KEY, v text NOT NULL DEFAULT \'x\', n bigserial)',
+        'CREATE TABLE cmp_a.t_grand (id int PRIMARY KEY, child_id int REFERENCES cmp_a.t_child(id))',
+        'CREATE VIEW cmp_a.v_parents AS SELECT id, nom FROM cmp_a.t_parent');
+      B.push('CREATE TABLE cmp_b.t_parent (id serial PRIMARY KEY, nom text NOT NULL, prix numeric(10,2), extra_col int)',
+        'CREATE TABLE cmp_b.t_child (id serial PRIMARY KEY, parent_id int, label text)',
+        'CREATE TABLE cmp_b.t_only_b (id int PRIMARY KEY)');
+    } else {
+      A.push('CREATE TABLE cmp_a.t_parent (id INT AUTO_INCREMENT PRIMARY KEY, nom VARCHAR(100) NOT NULL, ville VARCHAR(50), prix DECIMAL(10,2) DEFAULT 0) ENGINE=InnoDB',
+        'CREATE TABLE cmp_a.t_child (id INT AUTO_INCREMENT PRIMARY KEY, parent_id INT, label VARCHAR(50), UNIQUE KEY u_label (label), KEY idx_child_parent (parent_id), CONSTRAINT fk_child_parent FOREIGN KEY (parent_id) REFERENCES t_parent(id)) ENGINE=InnoDB',
+        'CREATE TABLE cmp_a.t_only_a (id INT PRIMARY KEY, v VARCHAR(20) NOT NULL DEFAULT \'x\', n BIGINT NOT NULL AUTO_INCREMENT, UNIQUE KEY (n)) ENGINE=InnoDB',
+        'CREATE TABLE cmp_a.t_grand (id INT PRIMARY KEY, child_id INT, CONSTRAINT fk_grand FOREIGN KEY (child_id) REFERENCES t_child(id)) ENGINE=InnoDB',
+        'CREATE VIEW cmp_a.v_parents AS SELECT id, nom FROM cmp_a.t_parent');
+      B.push('CREATE TABLE cmp_b.t_parent (id INT AUTO_INCREMENT PRIMARY KEY, nom TEXT NOT NULL, prix DECIMAL(10,2), extra_col INT) ENGINE=InnoDB',
+        'CREATE TABLE cmp_b.t_child (id INT AUTO_INCREMENT PRIMARY KEY, parent_id INT, label VARCHAR(50)) ENGINE=InnoDB',
+        'CREATE TABLE cmp_b.t_only_b (id INT PRIMARY KEY) ENGINE=InnoDB');
+    }
+    await run(A); await run(B);
+    const snap = async (c) => takeSnapshot(driver, c);
+    let d = diffSchemas(await snap('cmp_a'), await snap('cmp_b'));
+    const has = (obj, table, name, change) => d.items.some((i) => i.object === obj && i.table === table && i.name === name && i.change === change);
+    assert.ok(has('table', 't_only_a', 't_only_a', 'missing') && has('table', 't_grand', 't_grand', 'missing'));
+    assert.ok(has('view', 'v_parents', 'v_parents', 'missing'));
+    assert.ok(has('table', 't_only_b', 't_only_b', 'extra'));
+    assert.ok(has('column', 't_parent', 'ville', 'missing') && has('column', 't_parent', 'extra_col', 'extra') && has('column', 't_parent', 'nom', 'changed') && has('column', 't_parent', 'prix', 'changed'));
+    assert.ok(d.items.some((i) => i.object === 'index' && i.name === 'idx_child_parent' && i.change === 'missing'));
+    assert.ok(d.items.some((i) => i.object === 'constraint' && i.table === 't_child' && i.change === 'missing'));
+    assert.ok(/-- DROP TABLE /.test(d.script) && /-- ALTER TABLE .* DROP COLUMN/.test(d.script), 'suppressions en commentaire');
+    assert.ok(!/^DROP /m.test(d.script) && !/^ALTER TABLE .* DROP COLUMN/m.test(d.script), 'aucune suppression exécutable');
+    ok('différences détectées (tables, vue, colonnes, types, défauts, index, contraintes)', `${d.items.length} écarts`);
+    // le script appliqué à B, A et B ne diffèrent plus que par ce qui est en trop dans B (et la vue, laissée en commentaire)
+    if (pg) { await db(d.script); } else { await driver.script(splitStatements(d.script, 'mysql')); }
+    d = diffSchemas(await snap('cmp_a'), await snap('cmp_b'));
+    const left = d.items.filter((i) => !(i.change === 'extra' || i.object === 'view'));
+    assert.deepEqual(left, [], JSON.stringify(left));
+    assert.ok(d.items.every((i) => i.change === 'extra' || i.object === 'view'));
+    // A → B puis B → A : table présente des deux côtés et identique
+    const same = diffSchemas(await snap('cmp_a'), await snap('cmp_a'));
+    assert.equal(same.items.length, 0); assert.match(same.script, /Aucune différence/);
+    ok('script de migration appliqué sur la vraie base : plus aucun écart (hors éléments en trop)');
+    for (const n of ['cmp_a', 'cmp_b']) { await db(pg ? `DROP SCHEMA ${q(n)} CASCADE` : `DROP DATABASE ${q(n)}`); }
+  }
 
   // nettoyage
   fs.rmSync(tmp, { recursive: true, force: true });

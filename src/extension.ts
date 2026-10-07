@@ -13,6 +13,7 @@ import { statementAt } from './statementAt';
 import { ConnectionConfig, DbDriver, QueryResult } from './types';
 import { parseSimpleSelect } from './simpleSelect';
 import { paramNames, substituteParams } from './queryParams';
+import { diffSchemas, takeSnapshot } from './schemaDiff';
 import { SavedQueries } from './savedQueries';
 import { SavedFolderNode, SavedQueryNode, SavedTreeProvider } from './savedTree';
 import {
@@ -855,6 +856,83 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         });
       } catch (err) {
         vscode.window.showErrorMessage(`Structure de ${node.table.name} : ${errorMessage(err)}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.compareSchemas', async (node?: ContainerNode) => {
+      if (!node) {
+        return;
+      }
+      const a = node.connection;
+      // La cible : une autre base / un autre schéma, de la même connexion ou d'une connexion du même type.
+      const sameType = mgr.list().filter((c) => c.type === a.type);
+      let target: ConnectionConfig | undefined = a;
+      if (sameType.length > 1) {
+        const pick = await vscode.window.showQuickPick(
+          sameType.map((c) => ({ label: c.name, description: c.id === a.id ? '(même connexion)' : '', cfg: c })),
+          { placeHolder: `Comparer « ${node.container} » avec une base de quelle connexion ?` },
+        );
+        target = pick?.cfg;
+      }
+      if (!target) {
+        return;
+      }
+      let targetContainer: string | undefined;
+      try {
+        const containers = (await (await mgr.getDriver(target.id)).listContainers()).filter(
+          (c) => !(target?.id === a.id && c === node.container),
+        );
+        if (containers.length === 0) {
+          vscode.window.showInformationMessage('Aucune autre base ou aucun autre schéma à comparer.');
+          return;
+        }
+        targetContainer = (
+          await vscode.window.showQuickPick(containers, {
+            placeHolder: `Cible (« ${node.container} » est la référence : le script mettra la cible à son niveau)`,
+          })
+        );
+      } catch (err) {
+        vscode.window.showErrorMessage(`DB Explorer : ${errorMessage(err)}`);
+        return;
+      }
+      if (!targetContainer) {
+        return;
+      }
+      const b = { cfg: target, container: targetContainer };
+      try {
+        const diff = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `DB Explorer : comparaison de ${node.container} et ${b.container}…` },
+          async (progress) => {
+            const [da, db] = await Promise.all([mgr.getDriver(a.id), mgr.getDriver(b.cfg.id)]);
+            const snapA = await takeSnapshot(da, node.container, (d, n) => progress.report({ message: `${node.container} : ${d} / ${n}` }));
+            const snapB = await takeSnapshot(db, b.container, (d, n) => progress.report({ message: `${b.container} : ${d} / ${n}` }));
+            return diffSchemas(snapA, snapB);
+          },
+        );
+        const label = { missing: 'manquant dans la cible', extra: 'en trop dans la cible', changed: 'différent' } as const;
+        const what = { table: 'table', view: 'vue', column: 'colonne', index: 'index', constraint: 'contrainte' } as const;
+        results.showResult(
+          a.name,
+          `Comparaison ${node.container} (référence) → ${b.container} (cible)`,
+          {
+            columns: ['Table', 'Objet', 'Nom', 'Écart', 'Détail'],
+            rows: diff.items.map((i) => [i.table, what[i.object], i.name, label[i.change], i.detail]),
+            rowCount: diff.items.length,
+            truncated: false,
+            durationMs: 0,
+          },
+          badgesOf(a),
+          a.type,
+        );
+        const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: diff.script });
+        docConnections.set(doc.uri.toString(), b.cfg.id);
+        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+        updateStatus();
+        if (diff.items.length === 0) {
+          vscode.window.showInformationMessage('Aucune différence de structure.');
+        }
+      } catch (err) {
+        vscode.window.showErrorMessage(`Comparaison impossible : ${errorMessage(err)}`);
       }
     }),
 

@@ -22,6 +22,7 @@ exports.build = () =>
       simpleSelect: path.join(root, 'src/simpleSelect.ts'),
       queryParams: path.join(root, 'src/queryParams.ts'),
       cellView: path.join(root, 'src/cellView.ts'),
+      schemaDiff: path.join(root, 'src/schemaDiff.ts'),
       savedQueries: path.join(root, 'src/savedQueries.ts'),
       statementAt: path.join(root, 'src/statementAt.ts'),
       sqlGuard: path.join(root, 'src/sqlGuard.ts'),
