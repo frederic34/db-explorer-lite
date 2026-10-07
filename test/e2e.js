@@ -198,6 +198,53 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   }
   pg = await preview('produits');
 
+  // colonnes spéciales : image binaire, texte long / JSON, URL
+  console.log('Colonnes spéciales');
+  {
+    const PNG = '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000001e221bc330000000049454e44ae426082';
+    await db(`DROP TABLE IF EXISTS ${T('media')}`);
+    await db(`CREATE TABLE ${T('media')} (id int PRIMARY KEY, img ${KIND === 'pg' ? 'bytea' : 'blob'}, bin ${KIND === 'pg' ? 'bytea' : 'blob'}, note ${KIND === 'pg' ? 'text' : 'text'}, site ${KIND === 'pg' ? 'text' : 'varchar(200)'})`);
+    const bytes = (h) => (KIND === 'pg' ? `decode('${h}', 'hex')` : `UNHEX('${h}')`);
+    const longText = '{"clients":[' + '{"n":1},'.repeat(20) + '{"n":2}]}';
+    await db(`INSERT INTO ${T('media')} VALUES (1, ${bytes(PNG)}, ${bytes('00'.repeat(100))}, '${longText}', 'https://exemple.fr/page?x=1'), (2, NULL, NULL, 'court', 'javascript:alert(1)')`);
+    const mp = await preview('media');
+    const dbl = (tr, name) => cell_dbl(mp, tr, name);
+    function cell_dbl(page, tr, name) { page.cell(tr, name).dispatchEvent(new page.w.MouseEvent('dblclick', { bubbles: true })); }
+    // URL : lien http(s) seulement
+    const r1 = mp.rowById(1), r2 = mp.rowById(2);
+    assert.ok(mp.cell(r1, 'site').querySelector('a.urll'), 'URL http cliquable');
+    assert.equal(mp.cell(r2, 'site').querySelector('a'), null, 'javascript: jamais un lien');
+    global.__opened = [];
+    mp.cell(r1, 'site').querySelector('a.urll').click();
+    await until(() => global.__opened.length === 1, 'openExternal');
+    assert.equal(global.__opened[0], 'https://exemple.fr/page?x=1');
+    // texte long / JSON : ouvert indenté dans un éditeur
+    global.__docs = [];
+    dbl(r1, 'note');
+    await until(() => global.__docs.length === 1, 'doc texte');
+    assert.equal(global.__docs[0].language, 'json'); assert.ok(global.__docs[0].content.includes('\n  "clients"'));
+    assert.ok(!mp.cell(r2, 'note').classList.contains('viewable'), 'texte court : pas de vue');
+    // binaire non image : hexadécimal ; image : volet avec data: URI
+    global.__docs = [];
+    dbl(r1, 'bin');
+    await until(() => global.__docs.length === 1, 'hexdump');
+    assert.match(global.__docs[0].content, /media\.bin : 100 octets/); assert.match(global.__docs[0].content, /00000000  00 00 00/);
+    const panelsBefore = global.__vsPanels.length;
+    dbl(r1, 'img');
+    await until(() => global.__vsPanels.length === panelsBefore + 1, 'volet image');
+    const html = global.__vsPanels[global.__vsPanels.length - 1].html;
+    assert.ok(html.includes('data:image/png;base64,' + Buffer.from(PNG, 'hex').toString('base64')), 'image relue intacte');
+    assert.ok(/img-src data:/.test(html) && !/<script/i.test(html), 'aucun script dans le volet image');
+    // message forgé : une valeur non-URL n'est jamais ouverte
+    global.__opened = [];
+    global.__vsPanels[0].handlers.forEach((h) => h({ type: 'openUrl', token: 'x', rowIndex: 1, col: 4 }));
+    await tick(50);
+    assert.deepEqual(global.__opened, []);
+    ok('URL cliquable (http/https), texte long et JSON dans un éditeur, binaire en hexa, image dans un volet sans script');
+    await db(`DROP TABLE ${T('media')}`);
+  }
+  pg = await preview('produits');
+
   // résultat d'une requête libre « SELECT * FROM table » : modifiable (sans insertion)
   console.log('Résultat de requête modifiable');
   {

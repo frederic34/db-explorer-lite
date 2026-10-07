@@ -119,3 +119,30 @@ test('formats de copie : TSV (guillemets, NULL vide) et Markdown (| échappé, r
   const md = (await formatRows({ format: 'md', columns: cols }, rows)).text;
   assert.equal(md, '| a | b\\|c |\n| --- | --- |\n| x\ty | NULL |\n| ligne1<br>ligne2 | p\\|q |\n| dit "oui" | \\\\ |\n');
 });
+
+test('cellView : image reconnue aux octets, taille binaire, URL, valeur longue, hexa, requête de lecture', () => {
+  const cv = require('../.test-build/cellView.js');
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  assert.deepEqual(cv.sniffImage(png), { mime: 'image/png', label: 'PNG' });
+  assert.equal(cv.sniffImage(Buffer.from('ffd8ffe000104a46', 'hex')).label, 'JPEG');
+  assert.equal(cv.sniffImage(Buffer.from('GIF89a......', 'latin1')).label, 'GIF');
+  assert.equal(cv.sniffImage(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')])).label, 'WebP');
+  assert.equal(cv.sniffImage(Buffer.from('<svg onload=alert(1)>')), undefined, 'SVG jamais affiché comme image');
+  assert.equal(cv.sniffImage(Buffer.from('MZ\x90\x00')), undefined);
+  assert.equal(cv.binarySize('<binaire 4096 octets>'), 4096);
+  assert.equal(cv.binarySize('0x0102ff'), 3);
+  assert.equal(cv.binarySize('0x123'), undefined);
+  assert.equal(cv.binarySize('texte'), undefined);
+  assert.equal(cv.httpUrl('https://exemple.fr/a?b=1#c'), 'https://exemple.fr/a?b=1#c');
+  for (const bad of ['javascript:alert(1)', 'ftp://x', 'http://', 'http://a b', 'vu sur https://x.fr', 'file:///etc/passwd', 'https://x.fr/' + 'a'.repeat(2000), null]) {
+    assert.equal(cv.httpUrl(bad), undefined, String(bad).slice(0, 30));
+  }
+  assert.deepEqual(cv.prettyValue('{"a":[1,2]}'), { text: '{\n  "a": [\n    1,\n    2\n  ]\n}\n', language: 'json' });
+  assert.equal(cv.prettyValue('{pas json').language, 'plaintext');
+  assert.equal(cv.prettyValue('<a>x</a>').language, 'xml');
+  const d = cv.hexDump(Buffer.from('ABCDEFGHIJKLMNOPQR'));
+  assert.match(d, /^00000000  41 42 43 44 45 46 47 48 49 4a 4b 4c 4d 4e 4f 50  ABCDEFGHIJKLMNOP\n00000010  51 52 /);
+  assert.equal(cv.hexSelect('postgres', 's', 't', 'img', ['id', 'v']), `SELECT encode("img", 'hex') FROM "s"."t" WHERE "id" = $1 AND "v" = $2`);
+  assert.equal(cv.hexSelect('mysql', 'd', 't', 'img', ['id']), 'SELECT HEX(`img`) FROM `d`.`t` WHERE `id` = ?');
+  assert.equal(cv.hexSelect('sqlite', 'main', 't', 'img', ['id']), 'SELECT HEX("img") FROM "t" WHERE "id" = ?');
+});

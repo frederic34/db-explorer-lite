@@ -15,6 +15,7 @@ import {
 import { EXTENSIONS, ExportFormat, ExportOptions, formatRows, RowFormatter, streamTable } from './exporter';
 import { ColumnInfo, DbDriver, DbType, QueryResult } from './types';
 import { errorMessage, quoteIdent } from './util';
+import { binarySize, hexDump, hexSelect, httpUrl, MAX_BINARY_VIEW, prettyValue, sniffImage } from './cellView';
 
 type Row = (string | null)[];
 
@@ -206,7 +207,8 @@ const CSS = `
   td.actions, th.actions { white-space: nowrap; padding: 2px 6px; width: 1%; }
   td.actions input { vertical-align: middle; margin: 0 4px 0 0; }
   td.pk { color: var(--vscode-descriptionForeground); }
-  a.fkl { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  td.viewable { cursor: zoom-in; }
+  a.fkl, a.urll { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
   a.fkl:hover { color: var(--vscode-textLink-activeForeground); }
   .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
           border: 1px solid var(--vscode-focusBorder); }
@@ -523,10 +525,26 @@ const SCRIPT = String.raw`
     summary.textContent = ' · ' + data.summary + extra;
   }
 
-  function cellText(td, c) {
+  function cellText(td, c, r, j) {
     if (c === null) { td.className = 'null'; td.textContent = 'NULL'; return; }
+    if (r && c.length < 2000 && /^https?:[/][/][^ \t\r\n]+$/i.test(c)) {
+      var a = el('a', 'urll', c);
+      a.href = '#';
+      a.title = 'Ouvrir ' + c.slice(0, 200);
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        vscode.postMessage({ type: 'openUrl', token: data.token, rowIndex: r.i, col: j });
+      });
+      td.appendChild(a);
+      return;
+    }
     td.textContent = c;
     if (c.length > 60) { td.title = c.length > 1000 ? c.slice(0, 1000) + '…' : c; }
+    if (r && (c.length > 60 || c.indexOf('\n') !== -1 || /^<binaire [0-9]+ octets>$/.test(c) || /^0x[0-9a-fA-F]{8,}$/.test(c))) {
+      td.classList.add('viewable');
+      td.title = (c.length > 1000 ? c.slice(0, 1000) + '…' : c) + '\n(double-clic : voir la valeur)';
+    }
   }
 
   function setBusy(b) { busy = b; renderBody(); }
@@ -904,7 +922,12 @@ const SCRIPT = String.raw`
       if (server && fks[j] && r.c[j] !== null) {
         td.appendChild(fkLink(r, j));
       } else {
-        cellText(td, r.c[j]);
+        cellText(td, r.c[j], r, j);
+      }
+      if (td.classList.contains('viewable')) {
+        td.addEventListener('dblclick', (function (row, col) {
+          return function () { vscode.postMessage({ type: 'viewCell', token: data.token, rowIndex: row.i, col: col }); };
+        })(r, j));
       }
       if (edit && edit.pk.indexOf(j) !== -1 && r.c[j] !== null) { td.classList.add('pk'); }
       tr.appendChild(td);
@@ -1022,6 +1045,22 @@ const SCRIPT = String.raw`
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n > 1 ? many : one}`;
+}
+
+/** Image d'une colonne binaire dans un volet à part (aucun script : la page ne contient que l'image). */
+function showImage(title: string, mime: string, buf: Buffer): void {
+  const panel = vscode.window.createWebviewPanel('dbExplorer.image', title, vscode.ViewColumn.Beside, {
+    enableScripts: false,
+  });
+  const nonce = randomBytes(16).toString('base64');
+  panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'nonce-${nonce}'">
+<style nonce="${nonce}">
+  body { margin: 0; padding: 12px; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
+  .frame { display: inline-block; max-width: 100%; border: 1px solid var(--vscode-panel-border);
+    background: repeating-conic-gradient(#8884 0% 25%, transparent 0% 50%) 0 0 / 16px 16px; }
+  img { display: block; max-width: 100%; height: auto; }
+</style></head><body><div class="frame"><img alt="${title.replace(/[<>&"]/g, '')}" src="data:${mime};base64,${buf.toString('base64')}"></div></body></html>`;
 }
 
 export class ResultsPanel {
@@ -1572,6 +1611,12 @@ export class ResultsPanel {
         }
         break;
       }
+      case 'openUrl':
+        await this.openUrl(msg.rowIndex, msg.col);
+        break;
+      case 'viewCell':
+        await this.viewCell(msg.rowIndex, msg.col);
+        break;
       case 'copy':
         await this.copyRows(msg.rowIndexes);
         break;
@@ -1807,6 +1852,76 @@ export class ResultsPanel {
       this.reply(token, { op: 'delete', ok: true, rowIndexes: indexes });
     } catch (err) {
       fail(errorMessage(err));
+    }
+  }
+
+  private cellOf(rowIndex: unknown, col: unknown): { row: Row; col: number; value: string } | undefined {
+    const st = this.last;
+    if (!st || typeof rowIndex !== 'number' || typeof col !== 'number' || !Number.isInteger(col)) {
+      return undefined;
+    }
+    const row = st.rows[rowIndex];
+    const value = row?.[col];
+    return row && typeof value === 'string' ? { row, col, value } : undefined;
+  }
+
+  /** Clic sur une adresse http(s) : la valeur est relue côté extension, jamais prise du message. */
+  private async openUrl(rowIndex: unknown, col: unknown): Promise<void> {
+    const cell = this.cellOf(rowIndex, col);
+    const url = cell ? httpUrl(cell.value) : undefined;
+    if (url) {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    }
+  }
+
+  /** Double-clic : valeur complète dans un éditeur (JSON indenté), image dans un volet, binaire en hexadécimal. */
+  private async viewCell(rowIndex: unknown, col: unknown): Promise<void> {
+    const st = this.last;
+    const cell = this.cellOf(rowIndex, col);
+    if (!st || !cell) {
+      return;
+    }
+    const name = st.columns[cell.col];
+    const size = binarySize(cell.value);
+    if (size === undefined) {
+      const pv = prettyValue(cell.value);
+      const doc = await vscode.workspace.openTextDocument({ language: pv.language, content: pv.text });
+      await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+      return;
+    }
+    const src = st.browse?.src ?? st.spec;
+    const pk = src?.tableColumns.filter((c) => c.primaryKey) ?? [];
+    const pkIdx = pk.map((c) => st.columns.indexOf(c.name));
+    if (!src || pk.length === 0 || pkIdx.some((i) => i < 0 || cell.row[i] === null)) {
+      vscode.window.showInformationMessage('La valeur binaire complète se lit par la clé primaire : cette table ou ce résultat n\'en a pas.');
+      return;
+    }
+    if (size > MAX_BINARY_VIEW) {
+      vscode.window.showInformationMessage(`Valeur trop volumineuse pour être affichée (${Math.round(size / 1048576)} Mo, maximum ${MAX_BINARY_VIEW / 1048576} Mo).`);
+      return;
+    }
+    try {
+      const driver = await src.getDriver();
+      const q = hexSelect(src.dbType, src.container, src.table, name, pk.map((c) => c.name));
+      const res = await driver.query(q, pkIdx.map((i) => cell.row[i]));
+      const hex = res.rows[0]?.[0];
+      if (typeof hex !== 'string') {
+        vscode.window.showInformationMessage('Ligne introuvable (supprimée ou modifiée ?).');
+        return;
+      }
+      const buf = Buffer.from(hex, 'hex');
+      const img = sniffImage(buf);
+      if (img) {
+        showImage(`${src.table}.${name} (${img.label}, ${Math.max(1, Math.round(buf.length / 1024))} Ko)`, img.mime, buf);
+      } else {
+        const doc = await vscode.workspace.openTextDocument({
+          language: 'plaintext',
+          content: `${src.table}.${name} : ${buf.length} octets\n\n` + hexDump(buf),
+        });
+        await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage(`Lecture de la valeur impossible : ${errorMessage(err)}`);
     }
   }
 
