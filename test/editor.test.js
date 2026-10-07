@@ -91,3 +91,21 @@ test('editorKind : JSON, date, heure, datetime ; fuseaux horaires et autres type
   assert.equal(k('postgres', 'text'), '');
   assert.equal(k('mysql', 'varchar(20)'), '');
 });
+
+test('parseSimpleSelect : SELECT * d\'une seule table seulement', () => {
+  const { parseSimpleSelect: p } = require('../.test-build/simpleSelect.js');
+  assert.deepEqual(p('SELECT * FROM clients', 'postgres'), { table: 'clients' });
+  assert.deepEqual(p('select * from public.clients c where c.id > 3 order by id limit 10;', 'postgres'), { container: 'public', table: 'clients' });
+  assert.deepEqual(p('SELECT * FROM "Mon Schéma"."T ""x"""', 'postgres'), { container: 'Mon Schéma', table: 'T "x"' });
+  assert.deepEqual(p('SELECT * FROM `db`.`t` WHERE a = \'JOIN\'', 'mysql'), { container: 'db', table: 't' });
+  assert.deepEqual(p('SELECT *\nFROM t\nLIMIT 5 OFFSET 2', 'sqlite'), { table: 't' });
+  assert.deepEqual(p('SELECT * FROM t AS x WHERE x.a IN (SELECT a FROM u)', 'postgres'), { table: 't' });
+  for (const bad of [
+    'SELECT id FROM t', 'SELECT t.* FROM t', 'SELECT * FROM a JOIN b ON a.id = b.id', 'SELECT * FROM a, b',
+    'SELECT * FROM a UNION SELECT * FROM b', 'SELECT DISTINCT * FROM t', 'SELECT * FROM t GROUP BY a',
+    'SELECT * FROM (SELECT 1) s', 'WITH x AS (SELECT 1) SELECT * FROM x', 'SELECT * FROM t; SELECT * FROM u',
+    'SELECT * INTO copie FROM t', 'DELETE FROM t', 'SELECT * FROM t HAVING a > 1', 'SELECT * FROM t WINDOW w AS ()',
+  ]) {
+    assert.equal(p(bad, 'postgres'), undefined, bad);
+  }
+});

@@ -104,6 +104,8 @@ interface EditInfo {
   hasDefault: boolean[];
   nullable: boolean[];
   kinds: string[];
+  /** Résultat d'une requête libre : modification et suppression seulement. */
+  noInsert?: boolean;
 }
 
 interface Payload {
@@ -137,6 +139,8 @@ interface State {
   nav?: NavFrame[];
   /** Dialecte connu (requis pour exporter en INSERT SQL d'un résultat de requête). */
   dbType?: DbType;
+  /** Résultat d'une requête libre modifiable : pas d'insertion (la ligne ne correspondrait pas à la requête). */
+  noInsert?: boolean;
 }
 
 interface MultiState {
@@ -316,7 +320,7 @@ const SCRIPT = String.raw`
   var addBtn = null;
   if (edit) {
     delBtn = el('button', 'danger', 'Supprimer la sélection');
-    addBtn = el('button', 'primary', 'Ajouter une ligne');
+    if (!edit.noInsert) { addBtn = el('button', 'primary', 'Ajouter une ligne'); }
   }
   var exportBtn = el('button', '', 'Exporter…');
   exportBtn.title = 'Exporter en CSV, JSON ou instructions INSERT';
@@ -495,7 +499,7 @@ const SCRIPT = String.raw`
     updatePager();
     info.textContent = server ? '' : term ? vis.length + ' / ' + rows.length + ' lignes affichées' : '';
     if (edit) {
-      addBtn.disabled = busy;
+      if (addBtn) { addBtn.disabled = busy; }
       var n = selectedCount();
       delBtn.textContent = n > 0 ? 'Supprimer la sélection (' + n + ')' : 'Supprimer la sélection';
       delBtn.disabled = busy || n === 0;
@@ -927,7 +931,7 @@ const SCRIPT = String.raw`
   });
 
   if (edit) {
-    addBtn.addEventListener('click', startInsert);
+    if (addBtn) { addBtn.addEventListener('click', startInsert); }
     selectAll.addEventListener('change', function () {
       var on = selectAll.checked;
       visibleRows().forEach(function (r) { if (on) { selected[r.i] = true; } else { delete selected[r.i]; } });
@@ -1018,14 +1022,21 @@ export class ResultsPanel {
   private multi?: MultiState;
 
   /** Résultat d'une requête libre : lecture seule, tri et filtre appliqués à la page affichée. */
-  showResult(connection: string, sql: string, result: QueryResult, badges?: string[], dbType?: DbType): void {
+  showResult(
+    connection: string,
+    sql: string,
+    result: QueryResult,
+    badges?: string[],
+    dbType?: DbType,
+    editable?: { spec: EditSpec; readOnly?: boolean },
+  ): void {
     if (result.sets && result.sets.length > 1) {
       this.multi = { connection, sql, sets: result.sets, badges, dbType };
       this.showSet(result.sets.length - 1);
       return;
     }
     this.multi = undefined;
-    this.renderResult(connection, sql, result, badges, dbType);
+    this.renderResult(connection, sql, result, badges, dbType, undefined, editable);
   }
 
   /** Affiche le résultat n° `index` d'un script (onglet choisi). */
@@ -1052,6 +1063,7 @@ export class ResultsPanel {
     badges?: string[],
     dbType?: DbType,
     multi?: { sets: { label: string; title: string }[]; activeSet: number; position: string },
+    editable?: { spec: EditSpec; readOnly?: boolean },
   ): void {
     let summary: string;
     if (result.columns.length > 0) {
@@ -1072,7 +1084,25 @@ export class ResultsPanel {
       summary += ` · ${result.durationMs} ms`;
     }
 
-    this.last = { columns: result.columns, rows: result.rows.map((r) => [...r]), dbType };
+    const state: State = { columns: result.columns, rows: result.rows.map((r) => [...r]), dbType };
+    let edit: EditInfo | undefined;
+    let readOnlyReason: string | undefined;
+    if (editable && result.columns.length > 0) {
+      if (editable.readOnly) {
+        readOnlyReason = 'connexion en lecture seule';
+      } else {
+        const planned = planEditing(editable.spec.dbType, result.columns, editable.spec.tableColumns);
+        if ('plan' in planned) {
+          state.spec = editable.spec;
+          state.plan = planned.plan;
+          state.noInsert = true;
+          edit = { table: editable.spec.table, ...planned.plan, noInsert: true };
+        } else {
+          readOnlyReason = planned.reason;
+        }
+      }
+    }
+    this.last = state;
     this.render({
       kind: 'result',
       token: '',
@@ -1081,6 +1111,8 @@ export class ResultsPanel {
       columns: result.columns,
       rows: result.rows,
       summary,
+      edit,
+      readOnlyReason,
       badges,
       sets: multi?.sets,
       activeSet: multi?.activeSet,
@@ -1567,7 +1599,7 @@ export class ResultsPanel {
   private async insertRow(token: string, values: unknown): Promise<void> {
     const fail = (message: string) => this.reply(token, { op: 'insert', ok: false, message });
     const st = this.last;
-    if (!st?.spec || !st.plan) {
+    if (!st?.spec || !st.plan || st.noInsert) {
       return fail("Insertion impossible : ce résultat n'est pas modifiable.");
     }
     if (typeof values !== 'object' || values === null) {

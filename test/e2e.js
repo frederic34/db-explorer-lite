@@ -172,6 +172,36 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.equal(r[c('note')], '');
   ok("valeur '' enregistrée comme chaîne vide (et non NULL)");
 
+  // résultat d'une requête libre « SELECT * FROM table » : modifiable (sans insertion)
+  console.log('Résultat de requête modifiable');
+  {
+    const tableColumns = await driver.listColumns(SCHEMA, 'produits');
+    const sql = `SELECT * FROM ${T('produits')} WHERE id <= 3 ORDER BY id`;
+    const res = await driver.query(sql);
+    panel.showResult(CFG.name, sql, res, [], CFG.type, { spec: { dbType: CFG.type, container: SCHEMA, table: 'produits', tableColumns, getDriver: async () => driver } });
+    const fr = mount(tableColumns.map((c) => c.name));
+    assert.ok(![...fr.d.querySelectorAll('.bar button')].some((b) => /Ajouter/.test(b.textContent)), 'pas de bouton Ajouter');
+    assert.ok(fr.pencil(fr.rowById(2)), 'crayon présent');
+    const trf = (fr.pencil(fr.rowById(2)).click(), fr.editing());
+    fr.type(fr.input(trf, 'nom'), 'Modifié via requête');
+    fr.save();
+    await waitOp(fr, 'ok', 'update résultat libre');
+    assert.equal((await row('produits', 'id = 2'))[1], 'Modifié via requête');
+    // insertion forgée : refusée par le serveur de panneau
+    const before2 = await count('produits');
+    global.__vsPanels[0].handlers.forEach((h) => h({ type: 'insertRow', token: global.__vsPanels[0].lastToken || fr.w.eval('data.token'), values: { 1: 'x' } }));
+    await tick(80);
+    assert.equal(await count('produits'), before2, 'aucune insertion');
+    // résultat libre d'une autre forme : aucune modification possible
+    const res2 = await driver.query(`SELECT id, nom FROM ${T('produits')}`);
+    panel.showResult(CFG.name, 'SELECT id, nom ...', res2, [], CFG.type, { spec: { dbType: CFG.type, container: SCHEMA, table: 'produits', tableColumns, getDriver: async () => driver } });
+    const f2 = mount(['id', 'nom']);
+    assert.equal(f2.d.querySelectorAll('td.actions button.icon').length, 0);
+    assert.match(f2.d.getElementById('root').textContent, /Lecture seule/);
+    ok('SELECT * : édition et suppression possibles, insertion absente ; autre projection : lecture seule');
+  }
+  pg = await preview('produits');
+
   // éditeurs adaptés : JSON (indenté, validé) et dates (sélecteur natif)
   console.log('Éditeurs JSON et dates');
   await db(`DROP TABLE IF EXISTS ${T('evt')}`);

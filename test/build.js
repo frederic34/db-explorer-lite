@@ -19,6 +19,7 @@ exports.build = () =>
       sqliteWorker: path.join(root, 'src/sqliteWorker.ts'),
       importers: path.join(root, 'src/importers.ts'),
       explain: path.join(root, 'src/explain.ts'),
+      simpleSelect: path.join(root, 'src/simpleSelect.ts'),
       statementAt: path.join(root, 'src/statementAt.ts'),
       sqlGuard: path.join(root, 'src/sqlGuard.ts'),
       tree: path.join(root, 'src/treeProvider.ts'),

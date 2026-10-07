@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ConnectionManager } from './connectionManager';
-import { ResultsPanel } from './resultsPanel';
+import { EditSpec, ResultsPanel } from './resultsPanel';
 import { StructurePanels } from './structurePanel';
 import { DIAGRAM_CONSTS, DiagramPanels } from './diagramPanel';
 import { buildEdges, ErTable, layoutEr, toMermaid } from './erLayout';
@@ -10,7 +10,8 @@ import { SchemaCache } from './schemaCache';
 import { analyze as analyzeSql, assessRun, splitStatements } from './sqlGuard';
 import { explainSql, isExplain, planToResult } from './explain';
 import { statementAt } from './statementAt';
-import { ConnectionConfig, QueryResult } from './types';
+import { ConnectionConfig, DbDriver, QueryResult } from './types';
+import { parseSimpleSelect } from './simpleSelect';
 import {
   ColumnNode,
   ConnectionNode,
@@ -145,7 +146,52 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     ...(cfg.readOnly ? ['LECTURE SEULE'] : []),
   ];
 
-  /** Exécute une requête libre et affiche le résultat (lecture seule). */
+  /**
+   * `SELECT * FROM table [WHERE …]` : le résultat correspond à des lignes de la table, la grille
+   * peut donc être modifiée via la clé primaire. Toute autre requête reste en lecture seule.
+   */
+  async function editableSource(
+    cfg: ConnectionConfig,
+    driver: DbDriver,
+    sql: string,
+  ): Promise<{ spec: EditSpec; readOnly?: boolean } | undefined> {
+    try {
+      const simple = cfg.readOnly ? undefined : parseSimpleSelect(sql, cfg.type);
+      if (!simple) {
+        return undefined;
+      }
+      let container = simple.container;
+      if (!container) {
+        container =
+          cfg.type === 'sqlite'
+            ? 'main'
+            : cfg.type === 'mysql'
+              ? cfg.database || undefined
+              : String((await driver.query('SELECT current_schema()')).rows[0]?.[0] ?? '') || undefined;
+      }
+      if (!container) {
+        return undefined;
+      }
+      const tableColumns = await driver.listColumns(container, simple.table);
+      if (tableColumns.length === 0) {
+        return undefined;
+      }
+      return {
+        spec: {
+          dbType: cfg.type,
+          container,
+          table: simple.table,
+          tableColumns,
+          getDriver: () => mgr.getDriver(cfg.id),
+          production: cfg.production,
+        },
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Exécute une requête libre et affiche le résultat (modifiable pour un SELECT * simple). */
   async function execute(
     connectionId: string,
     sql: string,
@@ -220,7 +266,11 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
             }
           }
           record(true, result.durationMs);
-          results.showResult(cfg.name, sql, result, badges, cfg.type);
+          let editable;
+          if (!opts.transform && result.columns.length > 0 && !result.sets) {
+            editable = await editableSource(cfg, driver, sql);
+          }
+          results.showResult(cfg.name, sql, result, badges, cfg.type, editable);
         } catch (err) {
           record(false);
           results.showError(cfg.name, sql, token.requested ? 'Requête annulée.' : errorMessage(err), badges);
