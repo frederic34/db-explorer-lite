@@ -42,7 +42,9 @@ module.exports = {
       return want === undefined ? undefined : list.find((i) => (i.label || i).includes(want));
     },
     showInputBox: async () => (global.__inputs || []).shift(),
+    setStatusBarMessage(m) { global.__status = (global.__status || []).concat([m]); },
   },
+  env: { clipboard: { writeText: async (t) => { global.__clip = t; } } },
   ProgressLocation: { Notification: 15, Window: 10 },
   workspace: { getConfiguration: () => ({ get: (_k, d) => d }), fs: { writeFile: async (u, c) => { global.__written = { u, c }; } } },
 };

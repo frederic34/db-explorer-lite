@@ -3,7 +3,8 @@ import { isBinaryLike } from './editing';
 import { DbDriver, DbType } from './types';
 import { quoteIdent } from './util';
 
-export type ExportFormat = 'csv' | 'json' | 'sql';
+/** tsv et md servent à la copie dans le presse-papiers (collage dans un tableur ou dans une documentation). */
+export type ExportFormat = 'csv' | 'json' | 'sql' | 'tsv' | 'md';
 type Row = (string | null)[];
 
 export interface ExportColumn {
@@ -22,7 +23,10 @@ export interface ExportOptions {
   table?: string;
 }
 
-export const EXTENSIONS: Record<ExportFormat, string> = { csv: 'csv', json: 'json', sql: 'sql' };
+export const EXTENSIONS: Record<ExportFormat, string> = { csv: 'csv', json: 'json', sql: 'sql', tsv: 'tsv', md: 'md' };
+
+const mdCell = (v: string | null): string =>
+  v === null ? 'NULL' : v.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
 
 const NUMERIC_TYPE =
   /^(tiny|small|medium|big)?int(eger)?\b|^int\d|^serial|^bigserial|^smallserial|^decimal|^numeric|^number|^float|^double|^real|^money\b/i;
@@ -152,6 +156,10 @@ export class RowFormatter {
     if (this.o.format === 'csv') {
       // BOM UTF-8 : Excel détecte ainsi correctement les accents.
       await this.write('﻿' + names.map((n) => csvCell(n, this.sep)).join(this.sep) + '\r\n');
+    } else if (this.o.format === 'tsv') {
+      await this.write(names.map((n) => csvCell(n, '\t')).join('\t') + '\n');
+    } else if (this.o.format === 'md') {
+      await this.write(`| ${names.map(mdCell).join(' | ')} |\n| ${names.map(() => '---').join(' | ')} |\n`);
     } else if (this.o.format === 'json') {
       await this.write('[');
     }
@@ -165,6 +173,10 @@ export class RowFormatter {
     let out = '';
     if (this.o.format === 'csv') {
       out = rows.map((r) => r.map((v) => csvCell(v, this.sep)).join(this.sep) + '\r\n').join('');
+    } else if (this.o.format === 'tsv') {
+      out = rows.map((r) => r.map((v) => csvCell(v, '\t')).join('\t') + '\n').join('');
+    } else if (this.o.format === 'md') {
+      out = rows.map((r) => `| ${r.map(mdCell).join(' | ')} |\n`).join('');
     } else if (this.o.format === 'json') {
       for (const r of rows) {
         const obj: Record<string, unknown> = {};

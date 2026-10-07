@@ -109,3 +109,13 @@ test('parseSimpleSelect : SELECT * d\'une seule table seulement', () => {
     assert.equal(p(bad, 'postgres'), undefined, bad);
   }
 });
+
+test('formats de copie : TSV (guillemets, NULL vide) et Markdown (| échappé, retours ligne, NULL)', async () => {
+  const { formatRows } = require('../.test-build/exporter.js');
+  const cols = [{ name: 'a' }, { name: 'b|c' }];
+  const rows = [['x\ty', null], ['ligne1\nligne2', 'p|q'], ['dit "oui"', '\\']];
+  const tsv = (await formatRows({ format: 'tsv', columns: cols }, rows)).text;
+  assert.equal(tsv, 'a\tb|c\n"x\ty"\t\n"ligne1\nligne2"\tp|q\n"dit ""oui"""\t\\\n');
+  const md = (await formatRows({ format: 'md', columns: cols }, rows)).text;
+  assert.equal(md, '| a | b\\|c |\n| --- | --- |\n| x\ty | NULL |\n| ligne1<br>ligne2 | p\\|q |\n| dit "oui" | \\\\ |\n');
+});

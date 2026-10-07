@@ -172,6 +172,32 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.equal(r[c('note')], '');
   ok("valeur '' enregistrée comme chaîne vide (et non NULL)");
 
+  // copie dans le presse-papiers : lignes cochées ou page entière, plusieurs formats
+  console.log('Copier…');
+  {
+    const cp = await preview('produits');
+    const copyBtn = () => [...cp.d.querySelectorAll('.bar button')].find((b) => /Copier/.test(b.textContent));
+    assert.ok(copyBtn());
+    const clip = async (pick) => { global.__picks = [pick]; global.__clip = undefined; copyBtn().click(); await until(() => global.__clip !== undefined, 'presse-papiers ' + pick); return global.__clip; };
+    const tsv = await clip('Tableur');
+    const tl = tsv.split('\n');
+    assert.equal(tl[0].split('\t')[0], 'id');
+    assert.equal(tl.length, 1 + cp.trs().length, 'en-tête + toutes les lignes');
+    cp.check(cp.rowById(1)); cp.check(cp.rowById(3));
+    const md = await clip('Markdown');
+    const ml = md.split('\n');
+    assert.equal(ml.length, 2 + 2, 'en-tête, séparateur, 2 lignes cochées');
+    assert.ok(ml[0].startsWith('| id | nom |') && /^\| --- /.test(ml[1]));
+    const js = JSON.parse(await clip('JSON'));
+    assert.deepEqual(js.map((o) => o.id), KIND === 'pg' ? [1, 3] : [1, 3]);
+    const ins = await clip('INSERT SQL');
+    assert.ok(ins.startsWith(`INSERT INTO ${q(SCHEMA)}.${q('produits')} (`) && (ins.match(/\(\d/g) || []).length >= 2, ins.slice(0, 200));
+    const csv = await clip('CSV');
+    assert.equal(csv.split('\r\n').length, 3);
+    ok('Copier… : TSV, Markdown, JSON, INSERT et CSV, lignes cochées ou page entière');
+  }
+  pg = await preview('produits');
+
   // résultat d'une requête libre « SELECT * FROM table » : modifiable (sans insertion)
   console.log('Résultat de requête modifiable');
   {

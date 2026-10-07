@@ -330,6 +330,15 @@ const SCRIPT = String.raw`
   bar.appendChild(spacer);
   if (addBtn) { bar.appendChild(addBtn); }
   if (delBtn) { bar.appendChild(delBtn); }
+  var copyBtn = el('button', '', 'Copier…');
+  copyBtn.title = 'Copier les lignes cochées (ou toutes les lignes affichées) : tableur, Markdown, JSON, INSERT, CSV';
+  copyBtn.addEventListener('click', function () {
+    var idx = selectedCount() > 0
+      ? Object.keys(selected).map(Number).sort(function (a, b) { return a - b; })
+      : visibleRows().map(function (r) { return r.i; });
+    vscode.postMessage({ type: 'copy', token: data.token, rowIndexes: idx });
+  });
+  bar.appendChild(copyBtn);
   bar.appendChild(exportBtn);
   root.appendChild(bar);
 
@@ -1563,6 +1572,9 @@ export class ResultsPanel {
         }
         break;
       }
+      case 'copy':
+        await this.copyRows(msg.rowIndexes);
+        break;
       case 'export':
       case 'exportCsv':
         await this.exportData();
@@ -1796,6 +1808,61 @@ export class ResultsPanel {
     } catch (err) {
       fail(errorMessage(err));
     }
+  }
+
+  /** Copie des lignes (cochées, sinon toutes celles de la page) dans le presse-papiers. */
+  private async copyRows(rowIndexes: unknown): Promise<void> {
+    const last = this.last;
+    if (!last || !Array.isArray(rowIndexes)) {
+      return;
+    }
+    const rows = [...new Set(rowIndexes)]
+      .filter((i): i is number => typeof i === 'number' && Number.isInteger(i) && !!last.rows[i])
+      .map((i) => last.rows[i] as Row);
+    if (rows.length === 0) {
+      vscode.window.showInformationMessage('Aucune ligne à copier.');
+      return;
+    }
+    const b = last.browse;
+    const dbType = b ? b.src.dbType : last.spec?.dbType ?? last.dbType;
+    const formats: { label: string; description: string; format: ExportFormat }[] = [
+      { label: 'Tableur (TSV)', description: 'avec en-tête ; à coller dans Excel, LibreOffice, Sheets', format: 'tsv' },
+      { label: 'Markdown', description: 'tableau pour une documentation ou un ticket', format: 'md' },
+      { label: 'JSON', description: "tableau d'objets", format: 'json' },
+      { label: 'CSV', description: 'avec en-tête', format: 'csv' },
+    ];
+    if (dbType) {
+      formats.push({ label: 'INSERT SQL', description: 'instructions INSERT', format: 'sql' });
+    }
+    const picked = await vscode.window.showQuickPick(formats, {
+      placeHolder: `Copier ${plural(rows.length, 'ligne', 'lignes')} au format…`,
+    });
+    if (!picked) {
+      return;
+    }
+    let table: string | undefined;
+    if (picked.format === 'sql' && dbType) {
+      const src = b?.src ?? last.spec;
+      if (src) {
+        table = dbType === 'sqlite' ? quoteIdent(dbType, src.table) : `${quoteIdent(dbType, src.container)}.${quoteIdent(dbType, src.table)}`;
+      } else {
+        const name = await vscode.window.showInputBox({
+          prompt: 'Nom de la table dans les instructions INSERT',
+          value: 'resultat',
+          validateInput: (v) => (v.trim() ? undefined : 'Nom obligatoire'),
+        });
+        if (!name) {
+          return;
+        }
+        table = quoteIdent(dbType, name.trim());
+      }
+    }
+    const tableColumns = b?.src.tableColumns ?? last.spec?.tableColumns;
+    const columns = last.columns.map((name) => ({ name, type: tableColumns?.find((c) => c.name === name)?.type }));
+    const { text, lost } = await formatRows({ format: picked.format, columns, dbType, table }, rows);
+    await vscode.env.clipboard.writeText(picked.format === 'json' || picked.format === 'sql' ? text.trimEnd() : text.replace(/\n$/, ''));
+    const extra = lost > 0 ? ` (${plural(lost, 'valeur binaire tronquée remplacée', 'valeurs binaires tronquées remplacées')} par NULL)` : '';
+    vscode.window.setStatusBarMessage(`${plural(rows.length, 'ligne copiée', 'lignes copiées')} (${picked.label})${extra}`, 4000);
   }
 
   /** Exporte le résultat affiché (ou toute la table pour un aperçu) en CSV, JSON ou INSERT SQL. */
