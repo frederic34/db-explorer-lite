@@ -9,6 +9,7 @@ const { ResultsPanel } = require('../.test-build/panel.js');
 const { formatRows, streamTable } = require('../.test-build/exporter.js');
 const { buildPageQuery, buildCountQuery, parseFilter, keysetColumns } = require('../.test-build/browse.js');
 const { explainSql, planToResult } = require('../.test-build/explain.js');
+const { substituteParams } = require('../.test-build/queryParams.js');
 const { buildEdges, layoutEr, toMermaid } = require('../.test-build/erLayout.js');
 
 const KIND = process.argv[2];
@@ -353,6 +354,17 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
     assert.equal(after, before - 7, 'EXPLAIN ANALYZE exécute vraiment l\'écriture (d\'où la confirmation)');
     ok('EXPLAIN ANALYZE d\'un DELETE exécute bien l\'écriture (confirmation demandée côté extension)');
   }
+
+  // ------------------------------------------------------------ paramètres :nom
+  console.log('Paramètres nommés');
+  for (const v of ["O'Brien", "a\\' OR 1=1 --", 'x;DROP TABLE kk', '12', 'null', 'Café ☕ "q"']) {
+    const sqlp = substituteParams('SELECT :v AS v, :v AS w', CFG.type, { v });
+    const r = (await db(sqlp)).rows[0];
+    const expected = v === 'null' ? null : v;
+    assert.deepEqual(r.map((x) => (x === null ? null : String(x))), [expected, expected], sqlp);
+  }
+  assert.equal(Number((await db(`SELECT COUNT(*) FROM ${T('shop', 'kk')}`)).rows[0][0]) > 0, true);
+  ok('valeurs hostiles réinjectées en littéraux, relues à l\'identique');
 
   // nettoyage
   fs.rmSync(tmp, { recursive: true, force: true });

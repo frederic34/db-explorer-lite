@@ -12,6 +12,9 @@ import { explainSql, isExplain, planToResult } from './explain';
 import { statementAt } from './statementAt';
 import { ConnectionConfig, DbDriver, QueryResult } from './types';
 import { parseSimpleSelect } from './simpleSelect';
+import { paramNames, substituteParams } from './queryParams';
+import { SavedQueries } from './savedQueries';
+import { SavedFolderNode, SavedQueryNode, SavedTreeProvider } from './savedTree';
 import {
   ColumnNode,
   ConnectionNode,
@@ -43,6 +46,7 @@ export interface TestApi {
   manager: ConnectionManager;
   tree: ConnectionsTreeProvider;
   history: QueryHistory;
+  saved: SavedQueries;
   associate(documentUri: string, connectionId: string): void;
 }
 
@@ -50,6 +54,8 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
   const mgr = new ConnectionManager(context);
   manager = mgr;
   const tree = new ConnectionsTreeProvider(mgr);
+  const saved = new SavedQueries(context.globalState);
+  const savedTree = new SavedTreeProvider(saved);
   const results = new ResultsPanel();
   const structures = new StructurePanels();
   const diagrams = new DiagramPanels();
@@ -146,6 +152,33 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
     ...(cfg.readOnly ? ['LECTURE SEULE'] : []),
   ];
 
+  /** Paramètres `:nom` : valeurs demandées une à une (la dernière saisie sert de défaut), puis injectées en littéraux. */
+  async function bindParams(cfg: ConnectionConfig, sql: string): Promise<string | undefined> {
+    if (!config().get<boolean>('promptParameters', true)) {
+      return sql;
+    }
+    const names = paramNames(sql, cfg.type);
+    if (names.length === 0) {
+      return sql;
+    }
+    const memory = context.globalState.get<Record<string, string>>('dbExplorer.paramValues', {});
+    const values: Record<string, string> = {};
+    for (const [k, name] of names.entries()) {
+      const v = await vscode.window.showInputBox({
+        title: `Paramètre :${name} (${k + 1}/${names.length})`,
+        prompt: 'Nombre, texte (mis entre apostrophes automatiquement) ou null',
+        value: memory[name] ?? '',
+        ignoreFocusOut: true,
+      });
+      if (v === undefined) {
+        return undefined;
+      }
+      values[name] = v;
+    }
+    await context.globalState.update('dbExplorer.paramValues', Object.fromEntries(Object.entries({ ...memory, ...values }).slice(-100)));
+    return substituteParams(sql, cfg.type, values);
+  }
+
   /**
    * `SELECT * FROM table [WHERE …]` : le résultat correspond à des lignes de la table, la grille
    * peut donc être modifiée via la clé primaire. Toute autre requête reste en lecture seule.
@@ -202,6 +235,12 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       return;
     }
     const badges = badgesOf(cfg);
+
+    const bound = await bindParams(cfg, sql);
+    if (bound === undefined) {
+      return;
+    }
+    sql = bound;
 
     // Garde-fous : refus en lecture seule, confirmation des requêtes dangereuses / de production.
     const verdict = assessRun(sql, cfg.type, {
@@ -280,6 +319,26 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         }
       },
     );
+  }
+
+  /** Dossier choisi pour une requête enregistrée : '' = racine, null = annulé. */
+  async function pickSavedFolder(): Promise<string | '' | null> {
+    const NEW = '$(new-folder) Nouveau dossier…';
+    const NONE = '$(circle-slash) Aucun dossier (racine)';
+    const pick = await vscode.window.showQuickPick([NONE, ...saved.folders().map((f) => `$(folder) ${f}`), NEW], {
+      placeHolder: 'Dossier',
+    });
+    if (!pick) {
+      return null;
+    }
+    if (pick === NONE) {
+      return '';
+    }
+    if (pick === NEW) {
+      const name = await vscode.window.showInputBox({ title: 'Nouveau dossier' });
+      return name?.trim() ? name.trim() : null;
+    }
+    return pick.replace(/^\$\(folder\) /, '');
   }
 
   /** Instruction sous le curseur (ou sélection) : exécution, EXPLAIN, EXPLAIN ANALYZE. */
@@ -651,6 +710,111 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       }
     }),
 
+    vscode.commands.registerCommand('dbExplorer.saveQuery', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage('Ouvrez un fichier SQL.');
+        return;
+      }
+      const docId = docConnections.get(editor.document.uri.toString());
+      const dbType = (docId ? mgr.get(docId)?.type : undefined) ?? mgr.list()[0]?.type ?? 'postgres';
+      const sql = (
+        editor.selection.isEmpty
+          ? (statementAt(editor.document.getText(), editor.document.offsetAt(editor.selection.active), dbType)?.sql ?? '')
+          : editor.document.getText(editor.selection)
+      ).trim();
+      if (!sql) {
+        vscode.window.showInformationMessage('Aucune requête à enregistrer.');
+        return;
+      }
+      const first = sql.split('\n')[0].replace(/\s+/g, ' ').slice(0, 60);
+      const name = await vscode.window.showInputBox({ title: 'Enregistrer la requête', prompt: 'Nom', value: first, ignoreFocusOut: true });
+      if (!name?.trim()) {
+        return;
+      }
+      const folder = await pickSavedFolder();
+      if (folder === null) {
+        return;
+      }
+      await saved.add({ name, sql, folder: folder || undefined, connectionId: docId });
+      vscode.window.showInformationMessage(`Requête « ${name.trim()} » enregistrée.`);
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.openSaved', async (node?: SavedQueryNode) => {
+      if (!node) {
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: node.query.sql + '\n' });
+      if (node.query.connectionId && mgr.get(node.query.connectionId)) {
+        docConnections.set(doc.uri.toString(), node.query.connectionId);
+      }
+      await vscode.window.showTextDocument(doc, { preview: false });
+      updateStatus();
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.runSaved', async (node?: SavedQueryNode) => {
+      if (!node) {
+        return;
+      }
+      const cfg =
+        (node.query.connectionId ? mgr.get(node.query.connectionId) : undefined) ?? (await pickConnection());
+      if (cfg) {
+        await execute(cfg.id, node.query.sql);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.renameSaved', async (node?: SavedQueryNode) => {
+      if (!node) {
+        return;
+      }
+      const name = await vscode.window.showInputBox({ title: 'Renommer la requête', value: node.query.name });
+      if (name?.trim()) {
+        await saved.update(node.query.id, { name });
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.moveSaved', async (node?: SavedQueryNode) => {
+      if (!node) {
+        return;
+      }
+      const folder = await pickSavedFolder();
+      if (folder !== null) {
+        await saved.update(node.query.id, { folder: folder || undefined });
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.deleteSaved', async (node?: SavedQueryNode) => {
+      if (!node) {
+        return;
+      }
+      const del = 'Supprimer';
+      if ((await vscode.window.showWarningMessage(`Supprimer la requête « ${node.query.name} » ?`, { modal: true }, del)) === del) {
+        await saved.remove(node.query.id);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.renameSavedFolder', async (node?: SavedFolderNode) => {
+      if (!node) {
+        return;
+      }
+      const name = await vscode.window.showInputBox({ title: 'Renommer le dossier', value: node.name });
+      if (name?.trim() && name.trim() !== node.name) {
+        await saved.renameFolder(node.name, name);
+      }
+    }),
+
+    vscode.commands.registerCommand('dbExplorer.deleteSavedFolder', async (node?: SavedFolderNode) => {
+      if (!node) {
+        return;
+      }
+      const del = 'Supprimer le dossier';
+      if (
+        (await vscode.window.showWarningMessage(`Supprimer le dossier « ${node.name} » ? Ses requêtes sont conservées, à la racine.`, { modal: true }, del)) === del
+      ) {
+        await saved.removeFolder(node.name);
+      }
+    }),
+
     vscode.commands.registerCommand('dbExplorer.runStatement', () => runCurrent('run')),
     vscode.commands.registerCommand('dbExplorer.explain', () => runCurrent('explain')),
     vscode.commands.registerCommand('dbExplorer.explainAnalyze', () => runCurrent('analyze')),
@@ -786,6 +950,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       treeDataProvider: tree,
       showCollapseAll: true,
     }),
+    vscode.window.createTreeView('dbExplorer.saved', { treeDataProvider: savedTree }),
     status,
     runningItem,
     registerCompletion(schema, (doc) => {
@@ -808,7 +973,7 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
   updateStatus();
 
   if (process.env.DBX_TEST === '1') {
-    return { manager: mgr, tree, history, associate: (uri, id) => void docConnections.set(uri, id) };
+    return { manager: mgr, tree, history, saved, associate: (uri, id) => void docConnections.set(uri, id) };
   }
   return undefined;
 }

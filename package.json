@@ -45,6 +45,10 @@
         {
           "id": "dbExplorer.connections",
           "name": "Connexions"
+        },
+        {
+          "id": "dbExplorer.saved",
+          "name": "Requêtes enregistrées"
         }
       ]
     },
@@ -52,6 +56,10 @@
       {
         "view": "dbExplorer.connections",
         "contents": "Aucune connexion configurée.\n[Ajouter une connexion](command:dbExplorer.addConnection)\n[Importer des connexions](command:dbExplorer.importConnections)"
+      },
+      {
+        "view": "dbExplorer.saved",
+        "contents": "Aucune requête enregistrée.\nDans un éditeur SQL : clic droit → Enregistrer la requête."
       }
     ],
     "commands": [
@@ -182,6 +190,49 @@
         "command": "dbExplorer.explainAnalyze",
         "title": "Expliquer avec mesure (EXPLAIN ANALYZE)",
         "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.saveQuery",
+        "title": "Enregistrer la requête",
+        "category": "DB Explorer",
+        "icon": "$(save)"
+      },
+      {
+        "command": "dbExplorer.openSaved",
+        "title": "Ouvrir la requête enregistrée",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.runSaved",
+        "title": "Exécuter la requête enregistrée",
+        "category": "DB Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dbExplorer.renameSaved",
+        "title": "Renommer la requête",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.moveSaved",
+        "title": "Déplacer dans un dossier…",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.deleteSaved",
+        "title": "Supprimer la requête",
+        "category": "DB Explorer",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dbExplorer.renameSavedFolder",
+        "title": "Renommer le dossier",
+        "category": "DB Explorer"
+      },
+      {
+        "command": "dbExplorer.deleteSavedFolder",
+        "title": "Supprimer le dossier",
+        "category": "DB Explorer"
       }
     ],
     "menus": {
@@ -269,6 +320,46 @@
           "command": "dbExplorer.removeConnection",
           "when": "view == dbExplorer.connections && viewItem == connection",
           "group": "3_manage@2"
+        },
+        {
+          "command": "dbExplorer.runSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "inline@1"
+        },
+        {
+          "command": "dbExplorer.runSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "1_run"
+        },
+        {
+          "command": "dbExplorer.openSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "1_run"
+        },
+        {
+          "command": "dbExplorer.renameSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "dbExplorer.moveSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "3_manage@2"
+        },
+        {
+          "command": "dbExplorer.deleteSaved",
+          "when": "view == dbExplorer.saved && viewItem == savedQuery",
+          "group": "3_manage@3"
+        },
+        {
+          "command": "dbExplorer.renameSavedFolder",
+          "when": "view == dbExplorer.saved && viewItem == savedFolder",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "dbExplorer.deleteSavedFolder",
+          "when": "view == dbExplorer.saved && viewItem == savedFolder",
+          "group": "3_manage@2"
         }
       ],
       "editor/title": [
@@ -294,6 +385,11 @@
         },
         {
           "command": "dbExplorer.explain",
+          "when": "editorLangId == sql",
+          "group": "navigation"
+        },
+        {
+          "command": "dbExplorer.saveQuery",
           "when": "editorLangId == sql",
           "group": "navigation"
         }
@@ -358,6 +454,38 @@
         {
           "command": "dbExplorer.explainAnalyze",
           "when": "editorLangId == sql"
+        },
+        {
+          "command": "dbExplorer.openSaved",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.runSaved",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.renameSaved",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.moveSaved",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.deleteSaved",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.renameSavedFolder",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.deleteSavedFolder",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.saveQuery",
+          "when": "editorLangId == sql"
         }
       ],
       "editor/context": [
@@ -370,6 +498,11 @@
           "command": "dbExplorer.explain",
           "when": "editorLangId == sql",
           "group": "1_dbx@2"
+        },
+        {
+          "command": "dbExplorer.saveQuery",
+          "when": "editorLangId == sql",
+          "group": "1_dbx@3"
         }
       ]
     },
@@ -432,6 +565,11 @@
           "type": "boolean",
           "default": true,
           "description": "Sur une connexion marquée « production », demander confirmation avant toute écriture (éditeur SQL et grille)."
+        },
+        "dbExplorer.promptParameters": {
+          "type": "boolean",
+          "default": true,
+          "description": "Demander la valeur des paramètres nommés (:nom) avant d'exécuter une requête. Les « :: » de PostgreSQL, les chaînes et les commentaires sont ignorés."
         }
       }
     }
@@ -444,7 +582,7 @@
     "watch": "esbuild src/extension.ts src/sqliteWorker.ts --bundle --outdir=dist --external:vscode --external:pg-native --external:cpu-features --external:*.node --format=cjs --platform=node --target=node18 --sourcemap --watch",
     "package": "npm run build:prod && vsce package --no-dependencies",
     "test": "node test/run.js",
-    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js test/editor.test.js",
+    "test:unit": "node test/build.js && node --test test/unit.test.js test/tunnel.test.js test/form.test.js test/sqlite.test.js test/er.test.js test/structure.test.js test/refresh.test.js test/connections.test.js test/editor.test.js test/saved.test.js",
     "test:integration": "npm run build && node test/integration/runTest.js"
   },
   "dependencies": {
