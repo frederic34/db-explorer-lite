@@ -2,6 +2,16 @@
 
 Toutes les évolutions notables de DB Explorer Lite. Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions selon [SemVer](https://semver.org/lang/fr/).
 
+## [0.10.0] — 2026-10-07
+
+### Ajouté
+- **Comparaison de schémas** entre deux bases / schémas (MySQL/MariaDB, PostgreSQL, SQLite) : grille des écarts et **script de migration** (suppressions commentées, ordre des clés étrangères respecté).
+- **Clés étrangères en sens inverse** : lien ↩ sur les valeurs référencées, choix de la table et nombre de lignes, ouverture filtrée avec retour ←.
+- **Interface bilingue français / anglais**, selon la langue de VS Code : commandes, réglages, messages, grille, formulaires, diagramme. Les mots-clés du filtre acceptent les deux langues.
+
+### Modifié
+- Les valeurs binaires longues s'affichent `<BLOB N B>` (au lieu de `<binaire N octets>`), indépendamment de la langue.
+
 ## [0.9.0] — 2026-10-07
 
 ### Ajouté

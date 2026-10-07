@@ -9,6 +9,9 @@ Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fich
 - **Vue « DB Explorer »** dans la barre d'activité : connexions → bases (MySQL) ou schémas (PostgreSQL) → tables et vues → colonnes (type, clé primaire, NOT NULL).
 - **Aperçu des données** : icône « œil » au survol d'une table (ou clic droit → *Afficher les données*). Les données sont **paginées** ; le **tri** et le **filtre** portent sur toute la table, pas seulement sur la page affichée (voir [Parcourir une table](#parcourir-une-table)).
 - **Navigation par clés étrangères** : cliquez sur une valeur de clé étrangère pour ouvrir la ligne référencée ; voir [Naviguer par les clés étrangères](#naviguer-par-les-clés-étrangères).
+- **Sens inverse** : le lien ↩ sur une valeur de clé primaire liste les tables qui la référencent, avec le nombre de lignes ; voir [Naviguer par les clés étrangères](#naviguer-par-les-clés-étrangères).
+- **Comparaison de schémas** entre deux bases / schémas avec script de migration ; voir [Structure et diagramme](#structure-et-diagramme).
+- **Interface en français et en anglais**, selon la langue de VS Code.
 - **Éditeur SQL** : clic droit → *Nouvelle requête SQL*, ou commande `DB Explorer: Nouvelle requête SQL`. Autocomplétion, historique, annulation : voir [Éditeur SQL](#éditeur-sql).
 - **Garde-fous production** : connexions *lecture seule* et *production*, confirmation avant les requêtes dangereuses ; voir [Sécurité](#sécurité).
 - **Tunnel SSH intégré** ; voir [Tunnel SSH](#tunnel-ssh).
@@ -108,6 +111,8 @@ Si la ligne a été modifiée ou supprimée par quelqu'un d'autre entre-temps, l
 - **Structure** : clic droit sur une table ou une vue → *Afficher la structure*. Colonnes (type, clé primaire, obligatoire, valeur par défaut, auto-incrément / identité / colonne générée, commentaire), **index**, **contraintes** (clé primaire, unique, clé étrangère avec table référencée et actions, CHECK) et **DDL** reconstitué : *Copier le DDL* ou *Ouvrir dans un éditeur SQL*. Le DDL est celui du serveur (`SHOW CREATE TABLE`, SQLite) ou reconstitué depuis le catalogue (PostgreSQL) ; il est rejouable tel quel.
 - **Diagramme des relations** : clic droit sur une base / un schéma → *Diagramme des relations*. Les tables (colonnes, types, PK / FK) sont reliées par leurs clés étrangères ; une table est placée à droite de celles qu'elle référence. On peut **déplacer** les tables, **zoomer**, **chercher** une table, survoler une table pour mettre ses liens en évidence, passer en **clés seulement** pour alléger, **double-cliquer** une table pour afficher ses données. *Exporter en SVG* produit un fichier indépendant du thème ; *Copier (Mermaid)* donne un `erDiagram` à coller dans une documentation. Limites : 150 tables, clés étrangères sur une seule colonne (comme pour la navigation) ; les clés vers un autre schéma sont signalées par ↗ sans trait.
 
+- **Comparer deux bases / schémas** : clic droit sur une base ou un schéma (la **référence**) → *Comparer avec une autre base / un autre schéma…*, puis choix de la cible (même type de connexion). Une grille liste les écarts (tables, vues, colonnes, types, valeurs par défaut, index, contraintes) et un **script de migration** s'ouvre à côté, associé à la connexion cible : il amène la cible au niveau de la référence. Les suppressions sont **commentées** (rien de destructif n'est exécuté sans que vous le décommentiez), les tables sont créées dans l'ordre de leurs clés étrangères. Relisez toujours le script avant de l'exécuter. Limite : 400 tables.
+
 ## Exporter
 
 Le bouton **Exporter…** de la grille propose :
@@ -121,6 +126,8 @@ Les valeurs binaires de plus de 32 octets ne sont affichées que sous forme de t
 ## Naviguer par les clés étrangères
 
 Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur une seule colonne) sont des liens (en-tête marqué ↗) : un clic ouvre la table référencée, filtrée sur la ligne visée. Une puce (`id = 10`, avec ✕ pour la retirer) rappelle le filtre, et le bouton **←** revient à la vue précédente, avec son tri, sa page et son filtre (20 niveaux). Le filtre texte se combine avec l'égalité, et la grille reste modifiable. Les clés composites ne sont pas suivies.
+
+**Sens inverse** : sur une colonne référencée par d'autres tables (clé primaire, en général), chaque valeur porte un lien **↩**. Il propose les tables qui contiennent des références vers cette valeur, avec le nombre de lignes concernées ; le choix ouvre cette table filtrée sur la valeur, et **←** revient en arrière comme pour ↗.
 
 ## Éditeur SQL
 
