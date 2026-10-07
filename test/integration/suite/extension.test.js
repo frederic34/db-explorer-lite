@@ -106,6 +106,17 @@ suite('DB Explorer Lite dans VS Code', function () {
     assert.strictEqual(e.ok, true);
   });
 
+  test('requêtes enregistrées : ajout, dossier, ouverture dans un éditeur SQL', async () => {
+    const q = await api.saved.add({ name: 'Clients lyonnais', sql: "SELECT * FROM clients WHERE ville = 'Lyon'", folder: 'Tests', connectionId: connId });
+    assert.deepStrictEqual(api.saved.folders(), ['Tests']);
+    await vscode.commands.executeCommand('dbExplorer.openSaved', { query: q });
+    const doc = vscode.window.activeTextEditor.document;
+    assert.strictEqual(doc.languageId, 'sql');
+    assert.ok(doc.getText().includes("ville = 'Lyon'"));
+    await api.saved.remove(q.id);
+    assert.deepStrictEqual(api.saved.list(), []);
+  });
+
   test('connexions : groupes et export JSON sans mot de passe', async () => {
     await api.manager.setGroup([connId], 'Tests');
     const roots = await api.tree.getChildren();

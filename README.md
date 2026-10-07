@@ -13,6 +13,7 @@ Bases prises en charge : **MySQL / MariaDB**, **PostgreSQL** et **SQLite** (fich
 - **Garde-fous production** : connexions *lecture seule* et *production*, confirmation avant les requêtes dangereuses ; voir [Sécurité](#sécurité).
 - **Tunnel SSH intégré** ; voir [Tunnel SSH](#tunnel-ssh).
 - **Exécution** : `Ctrl+Alt+Entrée` (`Cmd+Alt+Entrée` sur Mac) ou bouton ▶ : la **sélection**, sinon **tout le fichier**. `Ctrl+Maj+Entrée` n'exécute que **l'instruction sous le curseur** ; `Ctrl+Alt+E` affiche son **plan d'exécution** (EXPLAIN). Voir [Éditeur SQL](#éditeur-sql).
+- **Requêtes enregistrées** (vue dédiée, avec dossiers) et **paramètres nommés** `:nom` demandés à l'exécution ; voir [Éditeur SQL](#éditeur-sql).
 - **Dossiers, import et export de connexions** (JSON sans mot de passe, `~/.pgpass`, `~/.my.cnf`, `~/.pg_service.conf`) : voir [Organiser ses connexions](#organiser-ses-connexions).
 - **Résultats d'une requête** dans un panneau latéral : tri par colonne, filtre texte (sur les lignes affichées), `NULL` mis en évidence, durée, nombre de lignes / lignes affectées, erreurs SQL affichées. Un script de plusieurs instructions affiche **un onglet par résultat**.
 - **Ajouter, modifier et supprimer des lignes** depuis l'aperçu d'une table : voir la section [Ajouter, modifier et supprimer des données](#ajouter-modifier-et-supprimer-des-données).
@@ -83,6 +84,8 @@ Dans l'**aperçu d'une table** (icône « œil »), la grille est éditable :
 - **Colonnes JSON** (`json` / `jsonb`, MySQL `JSON`) : le JSON s'ouvre **indenté** dans un champ à chasse fixe, vérifié à la frappe (bordure rouge et message si invalide, enregistrement bloqué) ; le bouton **{ }** met en forme, `Entrée` insère une ligne et `Ctrl+Entrée` enregistre. Un JSON simplement indenté n'est pas une modification ; le texte est envoyé tel que saisi (les grands nombres ne sont pas altérés). Sous MariaDB, `JSON` est du `LONGTEXT` : champ texte ordinaire.
 - **Dates et heures** (`date`, `time`, `datetime`, `timestamp` sans fuseau) : un **sélecteur natif** à côté du champ texte (qui reste libre) et un bouton **⏱** pour « maintenant ». Les types avec fuseau horaire restent en texte, pour ne pas perdre le décalage.
 
+- **Résultat d'une requête modifiable** : `SELECT * FROM [schéma.]table [alias] [WHERE …] [ORDER BY …] [LIMIT …]` (une seule table, sans jointure, regroupement ni `DISTINCT`) donne une grille où l'on peut **modifier** et **supprimer** des lignes, comme dans l'aperçu ; pas d'insertion (la ligne ne correspondrait pas à la requête). Toute autre forme (colonnes choisies, jointure…) reste en lecture seule. Inactif sur une connexion en lecture seule.
+
 Les lignes sont identifiées par leur **clé primaire** (simple ou composite). La grille reste donc en lecture seule, avec la raison affichée, pour :
 
 - une table **sans clé primaire** ;
@@ -92,6 +95,13 @@ Les lignes sont identifiées par leur **clé primaire** (simple ou composite). L
 Ne sont pas modifiables : les colonnes de clé primaire (elles restent saisissables à l'insertion quand le serveur ne les génère pas), les colonnes **générées** (calculées par le serveur), les colonnes binaires (BLOB, `bytea`, `bit`), géométriques, et — sous PostgreSQL — les tableaux et intervalles, dont l'affichage en texte ne peut pas être réécrit sans risque. Ces colonnes sont omises à l'insertion.
 
 Si la ligne a été modifiée ou supprimée par quelqu'un d'autre entre-temps, l'opération est annulée avec un message au lieu d'écraser silencieusement.
+
+## Copier et voir les valeurs
+
+- **Copier…** (barre de la grille) : les lignes **cochées**, sinon toutes celles affichées, vers le presse-papiers en **tableur** (TSV avec en-tête, à coller dans Excel / LibreOffice / Sheets), **Markdown**, **JSON**, **CSV** ou **INSERT SQL**.
+- **Double-clic sur une cellule longue** (texte de plus de 60 caractères, multiligne, JSON) : la valeur complète s'ouvre dans un éditeur à côté, JSON indenté.
+- **Colonnes binaires** : double-clic sur un `<binaire … octets>` — une **image** (PNG, JPEG, GIF, WebP, BMP, reconnue à ses premiers octets, jamais SVG) s'affiche dans un volet sans script ; tout autre contenu s'ouvre en vidage hexadécimal. La lecture se fait par la clé primaire, jusqu'à 10 Mo.
+- **Adresses `http(s)://…`** : une cellule qui est une adresse est un lien cliquable (VS Code demande confirmation avant d'ouvrir le site).
 
 ## Structure et diagramme
 
@@ -119,6 +129,8 @@ Dans l'aperçu d'une table, les valeurs d'une colonne **clé étrangère** (sur 
 - **Plusieurs instructions** : sous MySQL / MariaDB, un script est découpé et exécuté sur **une seule connexion** (tables temporaires, variables, transactions) ; une erreur indique « Instruction k/N ». Le résultat de **chaque** instruction est affiché dans un onglet (PostgreSQL, MariaDB / MySQL et SQLite) ; la durée n'est indiquée que pour l'ensemble sous PostgreSQL et SQLite.
 - **Instruction sous le curseur** : `Ctrl+Maj+Entrée` (`Cmd+Maj+Entrée`), bouton de la barre de l'éditeur ou menu contextuel. Les instructions sont délimitées par leurs `;` (hors chaînes, commentaires et blocs `$$`) ; une sélection a la priorité.
 - **EXPLAIN** : `Ctrl+Alt+E` (`Cmd+Alt+E`) ou bouton de la barre de l'éditeur affiche un **plan lisible** : une ligne par étape, indentée, avec coût, lignes estimées et alertes (parcours séquentiel / complet) — PostgreSQL (`FORMAT JSON`), MariaDB / MySQL, SQLite (`EXPLAIN QUERY PLAN`). La commande *Expliquer avec mesure (EXPLAIN ANALYZE)* ajoute les temps et lignes réels, mais **exécute réellement** l'instruction : une confirmation est demandée pour une écriture, qui reste soumise aux gardes-fous (refusée en lecture seule). SQLite ne mesure pas l'exécution.
+- **Requêtes enregistrées** : clic droit dans l'éditeur → *Enregistrer la requête* (sélection, sinon instruction sous le curseur ; nom et dossier demandés). La vue **Requêtes enregistrées** les range par dossier : un clic les ouvre dans un éditeur SQL (relié à la connexion d'origine), ▶ les exécute directement, clic droit pour renommer, déplacer ou supprimer.
+- **Paramètres nommés** : `WHERE ville = :ville AND age > :age` — la valeur de chaque `:nom` est demandée avant l'exécution (la dernière saisie sert de défaut) puis injectée en **littéral** : nombre tel quel, `null` pour NULL, sinon texte entre apostrophes correctement échappées (une valeur ne peut donc pas injecter de SQL). Sont ignorés : chaînes, identifiants, commentaires, blocs `$$`, conversions PostgreSQL `x::int`. Pour une liste (`IN`), saisissez plusieurs paramètres. Réglage `dbExplorer.promptParameters` pour désactiver.
 - **Annulation** : `DB Explorer: Annuler la requête en cours` (ou l'indicateur dans la barre d'état) interrompt la requête côté serveur (`pg_cancel_backend`, `KILL QUERY`).
 
 ## Sécurité

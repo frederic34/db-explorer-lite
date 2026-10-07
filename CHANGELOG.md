@@ -2,6 +2,18 @@
 
 Toutes les évolutions notables de DB Explorer Lite. Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions selon [SemVer](https://semver.org/lang/fr/).
 
+## [0.9.0] — 2026-10-07
+
+### Ajouté
+- **Requêtes enregistrées** : vue dédiée avec dossiers, enregistrer / ouvrir / exécuter / renommer / déplacer / supprimer.
+- **Paramètres nommés** `:nom` : valeurs demandées avant l'exécution et injectées en littéraux échappés (réglage `dbExplorer.promptParameters`).
+- **Résultats modifiables** pour un `SELECT * FROM table [WHERE …]` : modification et suppression de lignes depuis une requête libre.
+- **Copier…** depuis la grille : tableur (TSV), Markdown, JSON, CSV, INSERT SQL ; lignes cochées ou page affichée.
+- **Valeurs spéciales** : double-clic pour voir une valeur longue (JSON indenté) dans un éditeur, une image BLOB / bytea dans un volet, un binaire en hexadécimal ; adresses http(s) cliquables.
+
+### Modifié
+- Les tests d'intégration dans VS Code bloquent désormais la release.
+
 ## [0.8.0] — 2026-10-06
 
 ### Ajouté
