@@ -50,6 +50,8 @@ test('colonnes : clé primaire, défaut, générée, clés étrangères', async 
   const cu = await d.listColumns('main', 'customers');
   assert.deepEqual(cu.map((c) => [c.name, c.primaryKey, c.nullable, c.hasDefault]),
     [['id', true, false, true], ['name', false, false, false], ['note', false, true, false], ['photo', false, true, false]]);
+  const refs = await d.listReferrers('main', 'customers');
+  assert.deepEqual(refs.map((r) => [r.table, r.column, r.refColumn]), [['orders', 'customer_id', 'id']]);
   const o = await d.listColumns('main', 'orders');
   assert.deepEqual(o.find((c) => c.name === 'customer_id').references, { container: 'main', table: 'customers', column: 'id' });
   assert.equal(o.find((c) => c.name === 'tax').generated, true);

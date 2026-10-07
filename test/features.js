@@ -151,6 +151,10 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
       fk: c.references && c.references.container === 'shop' ? { table: c.references.table, column: c.references.column } : undefined })) });
   }
   const erEdges = buildEdges(erTables);
+  const refs = await driver.listReferrers('shop', 'produits');
+  assert.ok(refs.some((r) => r.table === 'enfants' && r.column === 'produit_id' && r.refColumn === 'id'), 'listReferrers : enfants → produits');
+  assert.equal((await driver.listReferrers('shop', 'enfants')).length, 0, 'enfants non référencée');
+  ok('clés étrangères en sens inverse (listReferrers)');
   assert.ok(erEdges.some((e) => e.from === 'enfants' && e.to === 'produits' && e.fromCol === 'produit_id' && e.toCol === 'id'));
   const lay = layoutEr(erTables, erEdges, { keysOnly: false });
   const at = Object.fromEntries(lay.nodes.map((n) => [n.name, n]));

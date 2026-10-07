@@ -5,6 +5,7 @@ import { Worker } from 'worker_threads';
 import { Pool, types as pgTypes } from 'pg';
 import {
   ColumnInfo,
+  Referrer,
   ConnectionConfig,
   ConstraintInfo,
   DbDriver,
@@ -259,6 +260,20 @@ export class MySqlDriver implements DbDriver {
     const created = (await this.run(`SHOW CREATE TABLE ${q(container)}.${q(table)}`)).rows as unknown[][];
     const ddl = String(created[0]?.[1] ?? '');
     return { isView: /^CREATE\b[^]*?\bVIEW\b/i.test(ddl.slice(0, 200)), columns, indexes, constraints, ddl: ddl + ';' };
+  }
+
+  async listReferrers(container: string, table: string): Promise<Referrer[]> {
+    const { rows } = await this.run(
+      'SELECT k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME, k.REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE k ' +
+        'WHERE k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ? ' +
+        'AND (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k2 WHERE k2.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA ' +
+        'AND k2.TABLE_NAME = k.TABLE_NAME AND k2.CONSTRAINT_NAME = k.CONSTRAINT_NAME) = 1 ' +
+        'ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME',
+      [container, table],
+    );
+    return (rows as unknown[][]).map((r) => ({
+      container: String(r[0]), table: String(r[1]), column: String(r[2]), refColumn: String(r[3]),
+    }));
   }
 
   async listColumns(container: string, table: string): Promise<ColumnInfo[]> {
@@ -620,6 +635,20 @@ export class PostgresDriver implements DbDriver {
     return this.generatedColumn;
   }
 
+  async listReferrers(container: string, table: string): Promise<Referrer[]> {
+    const rows = await this.rows(
+      'SELECT n.nspname, c.relname, a.attname, ra.attname FROM pg_constraint k ' +
+        'JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+        'JOIN pg_class rc ON rc.oid = k.confrelid JOIN pg_namespace rn ON rn.oid = rc.relnamespace ' +
+        'JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1] ' +
+        'JOIN pg_attribute ra ON ra.attrelid = k.confrelid AND ra.attnum = k.confkey[1] ' +
+        "WHERE k.contype = 'f' AND array_length(k.conkey, 1) = 1 AND rn.nspname = $1 AND rc.relname = $2 " +
+        'ORDER BY 1, 2, 3',
+      [container, table],
+    );
+    return rows.map((r) => ({ container: String(r[0]), table: String(r[1]), column: String(r[2]), refColumn: String(r[3]) }));
+  }
+
   async listColumns(container: string, table: string): Promise<ColumnInfo[]> {
     const rows = await this.rows(
       'SELECT c.column_name, c.data_type, c.is_nullable, ' +
@@ -875,6 +904,18 @@ export class SqliteDriver implements DbDriver {
       "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite!_%' ESCAPE '!' ORDER BY name",
     );
     return rows.map((r) => ({ name: String(r[0]), isView: r[1] === 'view' }));
+  }
+
+  async listReferrers(_container: string, table: string): Promise<Referrer[]> {
+    const rows = await this.rows(
+      'SELECT m.name, f."from", f."to", f.id, f.seq FROM sqlite_master m, pragma_foreign_key_list(m.name) f ' +
+        "WHERE m.type = 'table' AND f.\"table\" = ? ORDER BY m.name, f.id, f.seq",
+      [table],
+    );
+    const composite = new Set(rows.filter((r) => Number(r[4]) > 0).map((r) => `${r[0]}\u0000${r[3]}`));
+    return rows
+      .filter((r) => !composite.has(`${r[0]}\u0000${r[3]}`) && r[2] !== null)
+      .map((r) => ({ container: 'main', table: String(r[0]), column: String(r[1]), refColumn: String(r[2]) }));
   }
 
   async listColumns(_container: string, table: string): Promise<ColumnInfo[]> {

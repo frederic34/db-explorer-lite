@@ -51,9 +51,9 @@ function mount(columns) {
     d, w, columns,
     col: (name) => columns.indexOf(name),
     trs: () => [...d.querySelectorAll('tbody tr')],
-    rowById: (id) => page.trs().find((tr) => tr.children[2].textContent === String(id)),
+    rowById: (id) => page.trs().find((tr) => tr.children[2].textContent.replace('↩', '') === String(id)),
     cell: (tr, name) => tr.children[2 + columns.indexOf(name)],
-    ids: () => page.trs().map((tr) => tr.children[2].textContent),
+    ids: () => page.trs().map((tr) => tr.children[2].textContent.replace('↩', '')),
     op: () => ({ cls: d.getElementById('opmsg').className, text: d.getElementById('opmsg').textContent }),
     delBtn: () => [...d.querySelectorAll('.bar button')].find((b) => /Supprimer/.test(b.textContent)),
     pencil: (tr) => tr.querySelector('td.actions button.icon'),
@@ -571,7 +571,7 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.equal(await count('produits'), countBefore + 1);
   assert.equal(await count('produits') > 0, true);
   const first = ins.d.querySelector('tbody tr:first-child');
-  const newId = Number(first.children[2].textContent);
+  const newId = Number(first.children[2].textContent.replace('↩', ''));
   assert.ok(newId > maxId, 'id auto-généré');
   let rr = await row('produits', `${q('id')} = ${newId}`);
   assert.equal(rr[cols.indexOf('nom')], hostile);
@@ -596,7 +596,7 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   ins.type(ta(ins, 'note'), 'avec note');
   insRow(ins) && okBtn(ins).click();
   await waitOp(ins, 'ok', 'insert complet');
-  const id2 = Number(ins.d.querySelector('tbody tr:first-child').children[2].textContent);
+  const id2 = Number(ins.d.querySelector('tbody tr:first-child').children[2].textContent.replace('↩', ''));
   rr = await row('produits', `${q('id')} = ${id2}`);
   assert.equal(rr[cols.indexOf('prix')], '7.50');
   assert.deepEqual(JSON.parse(rr[cols.indexOf('meta')]), { x: 1 });
@@ -616,7 +616,7 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.equal(ta(ins, 'note').value, '');
   okBtn(ins).click();
   await waitOp(ins, 'ok', 'insert cases');
-  const id3 = Number(ins.d.querySelector('tbody tr:first-child').children[2].textContent);
+  const id3 = Number(ins.d.querySelector('tbody tr:first-child').children[2].textContent.replace('↩', ''));
   rr = await row('produits', `${q('id')} = ${id3}`);
   assert.equal(rr[cols.indexOf('actif')], KIND === 'pg' ? 'true' : '1', 'retour au défaut');
   assert.equal(rr[cols.indexOf('note')], null, 'NULL explicite');
@@ -715,7 +715,7 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
     idn.type(ta(idn, 'label'), 'identité');
     okBtn(idn).click();
     await waitOp(idn, 'ok', 'identity');
-    assert.equal(Number(idn.d.querySelector('tbody tr:first-child').children[2].textContent) >= 1, true);
+    assert.equal(Number(idn.d.querySelector('tbody tr:first-child').children[2].textContent.replace('↩', '')) >= 1, true);
     ok('PostgreSQL : identité GENERATED ALWAYS non saisissable, valeur générée relue');
   }
 
@@ -1129,6 +1129,30 @@ const waitOp = async (page, cls, label) => until(() => page.op().cls === cls, la
   assert.match(fc.d.querySelectorAll('thead th')[3].title, /Clé étrangère → t_b\.id/);
   assert.equal(fc.d.querySelector('.bar ~ .bar, .bar') !== null, true);
   ok('liens sur les valeurs de clé étrangère (NULL sans lien), en-tête marqué ↗');
+
+  // sens inverse : « ↩ » sur une valeur de clé primaire → tables qui la référencent (avec compte)
+  {
+    const ga = await preview('t_a');
+    const refl = [...ga.d.querySelectorAll('a.refl')];
+    assert.ok(refl.length >= 1, '↩ affiché sur la colonne référencée');
+    assert.ok(!ga.cell(ga.rowById(1), 'nom').querySelector('a.refl'), 'pas sur les colonnes non référencées');
+    global.__picks = ['t_b']; global.__qp = undefined;
+    const before = global.__vsPanels[0].html;
+    ga.cell(ga.rowById(1), 'id').querySelector('a.refl').click();
+    await until(() => global.__vsPanels[0].html !== before, 'table enfant ouverte');
+    const gb = mount(['id', 'a_id', 'label']);
+    await until(() => gb.trs().length >= 1, 'lignes enfants');
+    assert.ok(gb.ids().length >= 1 && /a_id = 1/.test(gb.d.querySelector('.chip').textContent), gb.d.querySelector('.chip').textContent);
+    assert.ok(/← t_a/.test([...gb.d.querySelectorAll('.bar button')].map((b) => b.textContent).join('|')), 'retour vers t_a');
+    // le message forgé sur une colonne non référencée n'ouvre rien
+    const html1 = global.__vsPanels[0].html;
+    global.__infos = [];
+    global.__vsPanels[0].handlers.forEach((h) => h({ type: 'showRefs', token: 'x', rowIndex: 0, col: 1 }));
+    await tick(80);
+    assert.equal(global.__vsPanels[0].html, html1);
+    ok('↩ : table enfant ouverte, filtrée sur la valeur, retour disponible');
+    fc = await preview('t_c');
+  }
 
   // t_c(100).b_id = 10 → t_b filtré sur id = 10
   const gB = await navTo(() => fkSel(fc)[0].click(), ['id', 'a_id', 'label']);

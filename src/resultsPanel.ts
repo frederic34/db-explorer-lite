@@ -65,6 +65,8 @@ interface BrowseState {
   filter: string;
   where?: WhereState;
   hasNext: boolean;
+  /** Colonnes de cette table que d'autres tables référencent (lien « lignes qui la référencent »). */
+  refCols: string[];
   /** Pagination par clé : keys[p] = valeurs de clé de la dernière ligne de la page p-1 (absent = pagination par OFFSET). */
   keys: (unknown[] | undefined)[];
   /** Total des lignes pour le filtre courant : undefined = calcul en cours, null = indisponible. */
@@ -83,6 +85,7 @@ interface BrowseInfo {
   filter: string;
   isView: boolean;
   where?: { column: string; value: string };
+  refCols?: string[];
   /** Table d'où l'on vient (bouton « Retour »). */
   back?: string;
 }
@@ -208,6 +211,8 @@ const CSS = `
   td.actions input { vertical-align: middle; margin: 0 4px 0 0; }
   td.pk { color: var(--vscode-descriptionForeground); }
   td.viewable { cursor: zoom-in; }
+  a.refl { margin-left: 6px; color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; opacity: 0.75; }
+  a.refl:hover { opacity: 1; }
   a.fkl, a.urll { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
   a.fkl:hover { color: var(--vscode-textLink-activeForeground); }
   .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
@@ -878,6 +883,22 @@ const SCRIPT = String.raw`
     return tr;
   }
 
+  var refSet = {};
+  (data.browse && data.browse.refCols || []).forEach(function (n) { refSet[n] = true; });
+  function refLink(r, j) {
+    var a = el('a', 'refl', '↩');
+    a.href = '#';
+    a.title = 'Lignes d’autres tables qui référencent cette valeur';
+    a.setAttribute('aria-label', 'Voir les lignes qui référencent cette valeur');
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (busy) { return; }
+      vscode.postMessage({ type: 'showRefs', token: data.token, rowIndex: r.i, col: j });
+    });
+    return a;
+  }
+
   function fkLink(r, j) {
     var a = el('a', 'fkl', r.c[j]);
     a.href = '#';
@@ -924,6 +945,7 @@ const SCRIPT = String.raw`
       } else {
         cellText(td, r.c[j], r, j);
       }
+      if (server && refSet[data.columns[j]] && r.c[j] !== null) { td.appendChild(refLink(r, j)); }
       if (td.classList.contains('viewable')) {
         td.addEventListener('dblclick', (function (row, col) {
           return function () { vscode.postMessage({ type: 'viewCell', token: data.token, rowIndex: row.i, col: col }); };
@@ -1186,6 +1208,7 @@ export class ResultsPanel {
       filter: init?.filter ?? '',
       where: init?.where ?? opts.where,
       hasNext: false,
+      refCols: [],
       keys: [],
       total: undefined,
       loadSeq: 0,
@@ -1199,6 +1222,12 @@ export class ResultsPanel {
       return;
     }
     b.hasNext = page.hasNext;
+    try {
+      const referrers = await (await src.getDriver()).listReferrers(src.container, src.table);
+      b.refCols = [...new Set(referrers.map((r) => r.refColumn))].filter((c) => page.columns.includes(c));
+    } catch {
+      b.refCols = []; // facultatif : la navigation inverse n'est simplement pas proposée
+    }
 
     const state: State = {
       columns: page.columns,
@@ -1297,6 +1326,7 @@ export class ResultsPanel {
       where: b.where
         ? { column: b.src.tableColumns[b.where.col].name, value: b.where.value }
         : undefined,
+      refCols: b.refCols,
       back: this.last?.nav?.length ? this.last.nav[this.last.nav.length - 1].src.table : undefined,
     };
   }
@@ -1475,6 +1505,74 @@ export class ResultsPanel {
     });
   }
 
+  /** « ↩ » : liste les tables dont des clés étrangères pointent vers cette valeur, avec le nombre de lignes. */
+  private async showRefs(rowIndex: unknown, col: unknown): Promise<void> {
+    const st = this.last;
+    const b = st?.browse;
+    const cell = this.cellOf(rowIndex, col);
+    if (!st || !b || !cell) {
+      return;
+    }
+    const column = st.columns[cell.col];
+    try {
+      const driver = await b.src.getDriver();
+      const all = (await driver.listReferrers(b.src.container, b.src.table)).filter((r) => r.refColumn === column);
+      if (all.length === 0) {
+        vscode.window.showInformationMessage('Aucune table ne référence cette colonne.');
+        return;
+      }
+      const shown = all.slice(0, 25);
+      const q = (n: string) => quoteIdent(b.src.dbType, n);
+      const counts = await Promise.all(
+        shown.map(async (r) => {
+          const target = b.src.dbType === 'sqlite' ? q(r.table) : `${q(r.container)}.${q(r.table)}`;
+          const sql = `SELECT COUNT(*) FROM ${target} WHERE ${q(r.column)} = ${b.src.dbType === 'postgres' ? '$1' : '?'}`;
+          try {
+            const res = await Promise.race([
+              driver.query(sql, [cell.value]),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error('délai')), 4000)),
+            ]);
+            return Number(res.rows[0]?.[0]);
+          } catch {
+            return undefined;
+          }
+        }),
+      );
+      const pick = await vscode.window.showQuickPick(
+        shown.map((r, i) => ({
+          label: `${r.container !== b.src.container ? r.container + '.' : ''}${r.table}.${r.column}`,
+          description: counts[i] === undefined ? 'comptage impossible' : plural(counts[i] as number, 'ligne', 'lignes'),
+          ref: r,
+        })),
+        {
+          placeHolder: `Lignes qui référencent ${b.src.table}.${column} = ${cell.value.slice(0, 40)}${all.length > shown.length ? ` (${all.length - shown.length} autres tables non listées)` : ''}`,
+        },
+      );
+      if (!pick || this.last !== st) {
+        return;
+      }
+      const ref = pick.ref;
+      const [tables, cols] = await Promise.all([driver.listTables(ref.container), driver.listColumns(ref.container, ref.table)]);
+      const refCol = cols.findIndex((c) => c.name === ref.column);
+      if (refCol < 0 || this.last !== st) {
+        return;
+      }
+      const frame: NavFrame = { src: b.src, offset: b.offset, pageSize: b.pageSize, sort: b.sort, filter: b.filter, where: b.where };
+      await this.openTable(
+        {
+          ...b.src,
+          container: ref.container,
+          table: ref.table,
+          tableColumns: cols,
+          isView: tables.find((t) => t.name === ref.table)?.isView ?? false,
+        },
+        { where: { col: refCol, value: cell.value }, nav: [...(st.nav ?? []), frame].slice(-20) },
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(`Lecture des références impossible : ${errorMessage(err)}`);
+    }
+  }
+
   /** Clic sur une valeur de clé étrangère : ouvre la table référencée, filtrée sur cette valeur. */
   private async followFk(msg: Message): Promise<void> {
     const st = this.last;
@@ -1611,6 +1709,9 @@ export class ResultsPanel {
         }
         break;
       }
+      case 'showRefs':
+        await this.showRefs(msg.rowIndex, msg.col);
+        break;
       case 'openUrl':
         await this.openUrl(msg.rowIndex, msg.col);
         break;

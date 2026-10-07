@@ -51,6 +51,16 @@ export interface ColumnInfo {
   references?: { container: string; table: string; column: string };
 }
 
+/** Clé étrangère d'une table « enfant » vers la table consultée. */
+export interface Referrer {
+  container: string;
+  table: string;
+  /** Colonne de la table enfant. */
+  column: string;
+  /** Colonne référencée de la table consultée. */
+  refColumn: string;
+}
+
 export interface StructureColumn {
   name: string;
   type: string;
@@ -124,6 +134,8 @@ export interface DbDriver {
   listTables(container: string): Promise<TableInfo[]>;
   listColumns(container: string, table: string): Promise<ColumnInfo[]>;
   query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult>;
+  /** Clés étrangères (sur une seule colonne) d'autres tables qui pointent vers cette table. */
+  listReferrers(container: string, table: string): Promise<Referrer[]>;
   /** Colonnes détaillées, index, contraintes et DDL d'une table ou d'une vue. */
   describeTable(container: string, table: string): Promise<TableStructure>;
   /**
