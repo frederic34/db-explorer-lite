@@ -41,3 +41,27 @@ test('arbre : ne rafraîchir que la connexion concernée', async () => {
   tree.refreshConnection('a');
   assert.equal(fired.pop(), again[0]);
 });
+
+test('arbre : rubriques Tables / Vues / Fonctions / Procédures / Événements, vides masquées', async () => {
+  const cfg = { id: 'a', name: 'A', type: 'mysql', host: 'h', port: 1, user: 'u' };
+  const driver = {
+    listTables: async () => [{ name: 't1', isView: false, rows: 5, approx: true }, { name: 't2', isView: false }, { name: 'v1', isView: true }],
+    listRoutines: async () => [{ name: 'f', kind: 'function', id: 'f' }, { name: 'p', kind: 'procedure', id: 'p' }],
+    listEvents: async () => { throw new Error('droits insuffisants'); },
+  };
+  const mgr = { list: () => [cfg], onDidChange: () => ({ dispose() {} }), getDriver: async () => driver };
+  const tree = new ConnectionsTreeProvider(mgr);
+  const [conn] = await tree.getChildren();
+  const [container] = await tree.getChildren(conn);
+  // (le conteneur est celui de la base ; on le fabrique directement)
+  const { ContainerNode } = require('../.test-build/tree.js');
+  const cats = await tree.getChildren(new ContainerNode(cfg, 'db'));
+  assert.deepEqual(cats.map((c) => [c.kind, c.description]), [['tables', '2'], ['views', '1'], ['functions', '1'], ['procedures', '1']], 'événements en erreur : rubrique absente, le reste s\'affiche');
+  assert.deepEqual((await tree.getChildren(cats[0])).map((n) => n.label), ['t1', 't2']);
+  assert.deepEqual((await tree.getChildren(cats[1])).map((n) => n.label), ['v1']);
+  const fn = (await tree.getChildren(cats[2]))[0];
+  assert.equal(fn.contextValue, 'function');
+  assert.equal(fn.command.command, 'dbExplorer.showDefinition');
+  assert.equal((await tree.getChildren(cats[3]))[0].contextValue, 'procedure');
+  void container;
+});

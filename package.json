@@ -2,7 +2,7 @@
   "name": "db-explorer-lite",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "publisher": "local",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -239,6 +239,12 @@
         "title": "%commands.31.title%",
         "category": "DB Explorer",
         "icon": "$(diff)"
+      },
+      {
+        "command": "dbExplorer.showDefinition",
+        "title": "%commands.32.title%",
+        "category": "DB Explorer",
+        "icon": "$(code)"
       }
     ],
     "menus": {
@@ -314,7 +320,7 @@
         },
         {
           "command": "dbExplorer.copyName",
-          "when": "view == dbExplorer.connections && viewItem =~ /^(container|table|view|column)$/",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(container|table|view|column|function|procedure|event)$/",
           "group": "2_edit@1"
         },
         {
@@ -371,6 +377,11 @@
           "command": "dbExplorer.compareSchemas",
           "when": "view == dbExplorer.connections && viewItem == container",
           "group": "1_query@2"
+        },
+        {
+          "command": "dbExplorer.showDefinition",
+          "when": "view == dbExplorer.connections && viewItem =~ /^(function|procedure|event)$/",
+          "group": "1_query@1"
         }
       ],
       "editor/title": [
@@ -500,6 +511,10 @@
         },
         {
           "command": "dbExplorer.compareSchemas",
+          "when": "false"
+        },
+        {
+          "command": "dbExplorer.showDefinition",
           "when": "false"
         }
       ],

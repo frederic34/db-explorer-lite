@@ -21,6 +21,8 @@ import {
   ConnectionNode,
   ConnectionsTreeProvider,
   ContainerNode,
+  RoutineNode,
+  EventNode,
   DbNode,
   GroupNode,
   TableNode,
@@ -1021,6 +1023,22 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
       }
     }),
 
+    vscode.commands.registerCommand('dbExplorer.showDefinition', async (node?: RoutineNode | EventNode) => {
+      if (!node) {
+        return;
+      }
+      try {
+        const driver = await mgr.getDriver(node.connection.id);
+        const src = await driver.getDefinition(node.container, node.definitionKind, node.definitionId);
+        const doc = await vscode.workspace.openTextDocument({ language: 'sql', content: src.replace(/\s+$/, '') + '\n' });
+        docConnections.set(doc.uri.toString(), node.connection.id);
+        await vscode.window.showTextDocument(doc, { preview: true });
+        updateStatus();
+      } catch (err) {
+        vscode.window.showErrorMessage(t(`Définition de ${node.label as string} : ${errorMessage(err)}`, `Definition of ${node.label as string}: ${errorMessage(err)}`));
+      }
+    }),
+
     vscode.commands.registerCommand('dbExplorer.copyName', async (node?: DbNode) => {
       let name: string | undefined;
       if (node instanceof TableNode) {
@@ -1029,6 +1047,10 @@ export function activate(context: vscode.ExtensionContext): TestApi | undefined 
         name = node.column.name;
       } else if (node instanceof ContainerNode) {
         name = node.container;
+      } else if (node instanceof RoutineNode) {
+        name = node.routine.name;
+      } else if (node instanceof EventNode) {
+        name = node.event.name;
       }
       if (name) {
         await vscode.env.clipboard.writeText(name);

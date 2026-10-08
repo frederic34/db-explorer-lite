@@ -6,6 +6,9 @@ import { Pool, types as pgTypes } from 'pg';
 import {
   ColumnInfo,
   Referrer,
+  RoutineInfo,
+  EventInfo,
+  DefinitionKind,
   ConnectionConfig,
   ConstraintInfo,
   DbDriver,
@@ -150,6 +153,38 @@ export class MySqlDriver implements DbDriver {
       const n = r[2] === null || r[2] === undefined ? NaN : Number(r[2]);
       return { name: String(r[0]), isView, ...(isView || !Number.isFinite(n) ? {} : { rows: n, approx: true }) };
     });
+  }
+
+  async listRoutines(container: string): Promise<RoutineInfo[]> {
+    const { rows } = await this.run(
+      'SELECT ROUTINE_NAME, ROUTINE_TYPE FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = ? ORDER BY ROUTINE_NAME',
+      [container],
+    );
+    return (rows as unknown[][]).map((r) => ({
+      name: String(r[0]),
+      kind: String(r[1]).toUpperCase() === 'PROCEDURE' ? 'procedure' : 'function',
+      id: String(r[0]),
+    }));
+  }
+
+  async listEvents(container: string): Promise<EventInfo[]> {
+    const { rows } = await this.run(
+      'SELECT EVENT_NAME, STATUS FROM information_schema.EVENTS WHERE EVENT_SCHEMA = ? ORDER BY EVENT_NAME',
+      [container],
+    );
+    return (rows as unknown[][]).map((r) => ({ name: String(r[0]), status: r[1] === null ? undefined : String(r[1]) }));
+  }
+
+  async getDefinition(container: string, kind: DefinitionKind, id: string): Promise<string> {
+    const q = (n: string) => quoteIdent('mysql', n);
+    const { rows } = await this.run(`SHOW CREATE ${kind.toUpperCase()} ${q(container)}.${q(id)}`);
+    const r = (rows as unknown[][])[0];
+    // SHOW CREATE FUNCTION / PROCEDURE : [nom, sql_mode, source, …] ; SHOW CREATE EVENT : [nom, sql_mode, fuseau, source, …]
+    const src = r ? r[kind === 'event' ? 3 : 2] : null;
+    if (src === null || src === undefined || String(src) === '') {
+      throw new Error(t('Définition illisible (droits insuffisants ?)', 'Definition not readable (insufficient privileges?)'));
+    }
+    return String(src);
   }
 
   async describeTable(container: string, table: string): Promise<TableStructure> {
@@ -525,6 +560,40 @@ export class PostgresDriver implements DbDriver {
       // reltuples vaut -1 tant que la table n'a jamais été analysée : inconnu
       return { name: String(r[0]), isView, ...(isView || !Number.isFinite(n) || n < 0 ? {} : { rows: n, approx: true }) };
     });
+  }
+
+  async listRoutines(container: string): Promise<RoutineInfo[]> {
+    // Les routines fournies par une extension (pg_trgm, uuid-ossp…) sont écartées.
+    const rows = await this.rows(
+      "SELECT p.oid::text, p.proname, p.prokind, pg_get_function_identity_arguments(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace " +
+        "WHERE n.nspname = $1 AND p.prokind IN ('f','p') " +
+        "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e') ORDER BY p.proname, p.oid",
+      [container],
+    );
+    return rows.map((r) => ({
+      name: String(r[1]),
+      kind: r[2] === 'p' ? 'procedure' : 'function',
+      id: String(r[0]),
+      signature: String(r[3]),
+    }));
+  }
+
+  async listEvents(): Promise<EventInfo[]> {
+    return [];
+  }
+
+  async getDefinition(_container: string, kind: DefinitionKind, id: string): Promise<string> {
+    if (kind === 'event') {
+      throw new Error(t('Les événements planifiés n\'existent pas dans PostgreSQL.', 'Scheduled events do not exist in PostgreSQL.'));
+    }
+    if (!/^[0-9]+$/.test(id)) {
+      throw new Error('OID invalide');
+    }
+    const rows = await this.rows('SELECT pg_get_functiondef($1::oid)', [id]);
+    if (!rows[0] || rows[0][0] === null) {
+      throw new Error(t('Routine introuvable (supprimée entre-temps ?)', 'Routine not found (dropped in the meantime?)'));
+    }
+    return String(rows[0][0]) + ';';
   }
 
   async describeTable(container: string, table: string): Promise<TableStructure> {
@@ -928,6 +997,18 @@ export class SqliteDriver implements DbDriver {
       }),
     );
     return list;
+  }
+
+  async listRoutines(): Promise<RoutineInfo[]> {
+    return [];
+  }
+
+  async listEvents(): Promise<EventInfo[]> {
+    return [];
+  }
+
+  async getDefinition(): Promise<string> {
+    throw new Error(t('SQLite n\'a pas de routines stockées.', 'SQLite has no stored routines.'));
   }
 
   async listReferrers(_container: string, table: string): Promise<Referrer[]> {

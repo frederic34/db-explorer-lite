@@ -44,5 +44,6 @@
   "configuration.properties.dbExplorer.promptParameters.description": "Ask for the value of named parameters (:name) before running a query. PostgreSQL “::”, strings and comments are ignored.",
   "extension.displayName": "DB Explorer Lite",
   "extension.description": "Connect to MySQL/MariaDB, PostgreSQL or SQLite, browse tables, view and export data, run SQL queries, show structure and the relationship diagram.",
-  "configuration.properties.dbExplorer.showRowCounts.description": "Show the number of rows next to each table (server estimate for MySQL/MariaDB and PostgreSQL, exact count for SQLite)."
+  "configuration.properties.dbExplorer.showRowCounts.description": "Show the number of rows next to each table (server estimate for MySQL/MariaDB and PostgreSQL, exact count for SQLite).",
+  "commands.32.title": "Show definition"
 }

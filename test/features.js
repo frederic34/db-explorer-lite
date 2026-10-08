@@ -378,6 +378,47 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dbx-feat-'));
   ok('valeurs hostiles réinjectées en littéraux, relues à l\'identique');
 
   // ------------------------------------------------------------ comparaison de schémas
+  console.log('Routines et événements');
+  {
+    const pg = KIND === 'pg';
+    if (pg) {
+      await db('CREATE FUNCTION shop.f_double(x integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT x * 2 $$');
+      await db('CREATE FUNCTION shop.f_double(x text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT x || x $$');
+      await db('CREATE PROCEDURE shop.p_noop() LANGUAGE sql AS $$ SELECT 1 $$');
+    } else {
+      await driver.script([
+        'CREATE FUNCTION shop.f_double(x INT) RETURNS INT DETERMINISTIC RETURN x * 2',
+        'CREATE PROCEDURE shop.p_noop() SELECT 1',
+        'CREATE EVENT shop.ev_noop ON SCHEDULE EVERY 1 DAY DISABLE DO SELECT 1',
+      ]);
+    }
+    const rs = await driver.listRoutines('shop');
+    const fns = rs.filter((r) => r.kind === 'function' && r.name === 'f_double');
+    assert.equal(fns.length, pg ? 2 : 1, 'fonctions (surcharges PostgreSQL distinguées)');
+    assert.ok(rs.some((r) => r.kind === 'procedure' && r.name === 'p_noop'), 'procédure listée');
+    assert.ok(!rs.some((r) => r.kind === 'procedure' && r.name === 'f_double'), 'fonction pas classée en procédure');
+    if (pg) { assert.deepEqual(fns.map((f) => f.signature).sort(), ['x integer', 'x text']); }
+    for (const f of fns) {
+      const src = await driver.getDefinition('shop', 'function', f.id);
+      assert.ok(/CREATE (OR REPLACE )?(DEFINER=.* )?FUNCTION .*f_double/i.test(src.replace(/\s+/g, ' ')), src);
+    }
+    assert.ok(/p_noop/.test(await driver.getDefinition('shop', 'procedure', rs.find((r) => r.name === 'p_noop').id)));
+    const evs = await driver.listEvents('shop');
+    if (pg) {
+      assert.deepEqual(evs, []);
+    } else {
+      assert.deepEqual(evs.map((e) => e.name), ['ev_noop']);
+      assert.ok(/EVENT .*ev_noop/i.test(await driver.getDefinition('shop', 'event', 'ev_noop')));
+    }
+    await assert.rejects(driver.getDefinition('shop', 'function', pg ? '1' : 'inexistante'));
+    ok('fonctions, procédures et événements : liste, surcharges, définition', `${rs.length} routine(s)`);
+    if (pg) {
+      await db('DROP FUNCTION shop.f_double(integer)'); await db('DROP FUNCTION shop.f_double(text)'); await db('DROP PROCEDURE shop.p_noop()');
+    } else {
+      await driver.script(['DROP EVENT shop.ev_noop', 'DROP FUNCTION shop.f_double', 'DROP PROCEDURE shop.p_noop']);
+    }
+  }
+
   console.log('Comparaison de schémas');
   {
     const pg = KIND === 'pg';

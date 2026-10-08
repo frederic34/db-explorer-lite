@@ -42,6 +42,23 @@ export interface TableInfo {
   approx?: boolean;
 }
 
+/** Fonction ou procédure stockée. `id` identifie la routine sans ambiguïté (surcharges PostgreSQL : OID). */
+export interface RoutineInfo {
+  name: string;
+  kind: 'function' | 'procedure';
+  id: string;
+  /** Arguments, pour distinguer les surcharges (PostgreSQL). */
+  signature?: string;
+}
+
+/** Événement planifié (MySQL / MariaDB). */
+export interface EventInfo {
+  name: string;
+  status?: string;
+}
+
+export type DefinitionKind = 'function' | 'procedure' | 'event';
+
 export interface ColumnInfo {
   name: string;
   type: string;
@@ -136,6 +153,12 @@ export interface DbDriver {
   /** Bases (MySQL) ou schémas (PostgreSQL). */
   listContainers(): Promise<string[]>;
   listTables(container: string): Promise<TableInfo[]>;
+  /** Fonctions et procédures stockées (vide pour SQLite). */
+  listRoutines(container: string): Promise<RoutineInfo[]>;
+  /** Événements planifiés (MySQL / MariaDB ; vide ailleurs). */
+  listEvents(container: string): Promise<EventInfo[]>;
+  /** Code source (CREATE …) d'une fonction, procédure ou événement ; `id` vient de RoutineInfo.id ou EventInfo.name. */
+  getDefinition(container: string, kind: DefinitionKind, id: string): Promise<string>;
   listColumns(container: string, table: string): Promise<ColumnInfo[]>;
   query(sql: string, params?: unknown[], cancel?: CancelToken): Promise<QueryResult>;
   /** Clés étrangères (sur une seule colonne) d'autres tables qui pointent vers cette table. */

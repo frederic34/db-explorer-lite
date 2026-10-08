@@ -2,6 +2,15 @@
 
 Toutes les évolutions notables de DB Explorer Lite. Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions selon [SemVer](https://semver.org/lang/fr/).
 
+## [0.12.0] — 2026-10-08
+
+### Ajouté
+- **Rubriques par base / schéma** dans l'arbre : *Tables*, *Vues*, *Fonctions*, *Procédures* et *Événements* (MySQL/MariaDB), chacune avec son nombre ; les rubriques vides (sauf les tables) sont masquées. Les surcharges de fonctions PostgreSQL sont distinguées par leurs arguments, les routines fournies par une extension sont écartées.
+- **Afficher la définition** d'une fonction, d'une procédure ou d'un événement (clic ou menu) : le `CREATE …` s'ouvre dans un éditeur SQL lié à la connexion.
+
+### Modifié
+- Les tables et les vues ne sont plus mélangées sous la base : les tables sont dans la rubrique *Tables*, dépliée d'emblée.
+
 ## [0.11.0] — 2026-10-07
 
 ### Ajouté

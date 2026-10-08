@@ -67,7 +67,9 @@ suite('DB Explorer Lite dans VS Code', function () {
     assert.ok(conn, 'connexion visible à la racine');
     const [container] = await api.tree.getChildren(conn);
     assert.strictEqual(container.container, 'main');
-    const tables = await api.tree.getChildren(container);
+    const categories = await api.tree.getChildren(container);
+    assert.deepStrictEqual(categories.map((c) => c.kind), ['tables'], 'SQLite : seulement la rubrique des tables');
+    const tables = await api.tree.getChildren(categories[0]);
     assert.deepStrictEqual(tables.map((t) => t.table.name), ['clients']);
     const cols = await api.tree.getChildren(tables[0]);
     assert.deepStrictEqual(cols.map((c) => c.column.name), ['id', 'nom', 'ville']);
